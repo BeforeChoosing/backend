@@ -8,11 +8,12 @@
 
 后端使用 Conda 管理 Python 环境，当前提供 FastAPI API、Qwen 网关和 ProfileAgent。
 
+当前版本仅用于 macOS、Linux 或 Windows 电脑上的本机运行，不涉及服务器部署。后端默认监听 `127.0.0.1:8000`。
+
 ## 前置条件
 
-- 已安装 Conda（Miniforge 或 Anaconda）。
+- macOS/Linux 或 Windows 已安装 Conda（Miniforge 或 Anaconda）。
 - 已准备阿里云百炼/DashScope API Key。
-- macOS/Linux 使用当前命令；Windows 请将 `cp` 改为文件复制命令。
 
 ## 第一次安装
 
@@ -22,6 +23,14 @@
 conda env create -f environment.yml
 conda activate before-choosing-demo
 cp .env.example .env
+```
+
+Windows PowerShell 使用以下复制命令：
+
+```powershell
+conda env create -f environment.yml
+conda activate before-choosing-demo
+Copy-Item .env.example .env
 ```
 
 然后编辑 `.env`，只在本机填写密钥：
@@ -35,6 +44,8 @@ CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ```
 
 `.env` 不会提交到 Git。
+
+`.env` 是后端本机配置文件。百炼密钥只保存在该文件中，由后端进程读取；不要复制到前端 `.env.local`。
 
 如果环境已经存在，后续只需：
 
@@ -66,6 +77,12 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 ```bash
 curl http://127.0.0.1:8000/api/v1/health
+```
+
+Windows PowerShell：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/health
 ```
 
 正常返回示例：
