@@ -1,30 +1,64 @@
 # Python caches and environments
 __pycache__/
 *.py[cod]
+.Python
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.pyright/
+.hypothesis/
+.tox/
+.nox/
+.ipynb_checkpoints/
 .venv/
 venv/
+env/
+ENV/
+.conda/
+conda-meta/
+.python-version
 
 # Local configuration and secrets
 .env
 .env.*
 !.env.example
 
-# Build and test output
+# Build, packaging, and test output
 build/
 dist/
 *.egg-info/
+.eggs/
+pip-wheel-metadata/
 .coverage
+.coverage.*
 htmlcov/
 coverage.xml
+coverage/
+pytest.xml
+test-results/
 
-# Local data and logs
+# Local data, runtime files, and logs
 data/
 uploads/
 logs/
+tmp/
+temp/
+.tmp/
+artifacts/
+outputs/
+runs/
+checkpoints/
+*.sqlite
+*.sqlite3
+*.db
 *.log
+*.pid
+*.sock
+*.prof
+*.trace
+*.dump
+*.tmp
+*.temp
 
 # Editors and OS files
 .DS_Store
