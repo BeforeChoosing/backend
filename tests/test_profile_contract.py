@@ -1,3 +1,5 @@
+import asyncio
+
 from app.agents.profile_agent import ProfileAgent
 from app.schemas.profile import ProfileProposalRequest
 
@@ -31,11 +33,11 @@ class FakeGateway:
         }
 
 
-async def test_profile_agent_returns_pending_cards():
-    response = await ProfileAgent(FakeGateway()).propose(
+def test_profile_agent_returns_pending_cards():
+    response = asyncio.run(ProfileAgent(FakeGateway()).propose(
         ProfileProposalRequest(experience_text="我在校园项目中访谈用户并根据反馈调整了方案，最后完成了可用原型。"),
         "trace-test-1234",
-    )
+    ))
     assert response.card_proposals[0].title == "用户研究"
     assert response.card_proposals[0].pending_verification is True
     assert response.card_proposals[0].source_refs == ["input:experience_text"]
