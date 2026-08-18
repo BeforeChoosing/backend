@@ -1,210 +1,33 @@
-# ============================================================
-# OR4D / NCM811 Clean-Peak Benchmark
-# ============================================================
-
-# -----------------------------
-# Operating systems
-# -----------------------------
-.DS_Store
-.AppleDouble
-.LSOverride
-Thumbs.db
-Desktop.ini
-
-# -----------------------------
-# Python caches and bytecode
-# -----------------------------
+# Python caches and environments
 __pycache__/
 *.py[cod]
-*$py.class
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.pyright/
-.coverage
-.coverage.*
-htmlcov/
-.cache/
-
-# -----------------------------
-# Python environments
-# -----------------------------
 .venv/
 venv/
-env/
-ENV/
-.python-version
-.conda/
-conda-meta/
 
-# -----------------------------
-# Packaging and build outputs
-# -----------------------------
-build/
-dist/
-*.egg-info/
-.eggs/
-pip-wheel-metadata/
-
-# -----------------------------
-# Jupyter
-# -----------------------------
-.ipynb_checkpoints/
-
-# -----------------------------
-# IDE / editor settings
-# -----------------------------
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.project
-.pydevproject
-
-# -----------------------------
-# Typst and document build files
-# Keep .typ and source images under version control.
-# Put generated documents in build/ or out/.
-# -----------------------------
-.typst-cache/
-*.typst.log
-*.aux
-*.log
-*.toc
-*.out
-*.synctex.gz
-
-# -----------------------------
-# Local benchmark runs
-# -----------------------------
-runs/
-outputs/
-artifacts/
-tmp/
-temp/
-scratch/
-logs/
-
-# Local-only baseline submissions and reports
-submissions/local/
-reports/local/
-
-# Generated Clean image/count data and per-realization detector intermediates.
-# These are reproducible and become large for the 1,081-pattern full run.
-public/clean_images*.h5
-public/clean_counted_images*.h5
-public/clean_peaks_*.h5
-diagnostics/clean_expectation_*_peaks*.h5
-diagnostics/clean_counted_dose*_peaks*.h5
-diagnostics/clean_image_overlays*/
-diagnostics/clean_counted_overlays*/
-diagnostics/clean_oracle_ablation_*.h5
-submissions/acom_clean_counted_*.jsonl
-submissions/acom_clean_expectation_*.jsonl
-submissions/acom_clean_physical_oracle_*.jsonl
-submissions/acom_clean_ablation_*.jsonl
-submissions/acom_clean_matched_*.jsonl
-submissions/acom_clean_image_matched_*.jsonl
-reports/acom_clean_details_counted_*.json
-reports/acom_plan_audit_counted_*.json
-reports/acom_clean_details_ablation_*.json
-reports/acom_plan_audit_ablation_*.json
-reports/acom_clean_details_image_matched_*.json
-reports/acom_plan_audit_image_matched_*.json
-reports/acom_clean_details_matched_*.json
-reports/acom_plan_audit_matched_*.json
-reports/acom_clean_details_physical_oracle_pi*.json
-reports/acom_plan_audit_physical_oracle_pi*.json
-reports/acom_clean_details_physical_oracle_s*.json
-reports/acom_plan_audit_physical_oracle_s*.json
-
-# V5 large datasets and full-resolution intermediates live on the server.
-# Small manifests, aggregate/row-level JSON results, HTML and PDF remain tracked.
-public/clean_v5_*.h5
-diagnostics/clean_v5_*.h5
-diagnostics/clean_v5_response_maps/
-diagnostics/clean_v5_refinement_trajectories/
-reports/v5/full_results/
-# Full per-dose/per-repeat V4 details are retained locally but not tracked.
-reports/v4/runs/
-server_artifacts/
-checkpoints/
-*.partial
-pyxem_templates/
-*pyxem_template_library*.pickle
-
-# V6 large datasets, compressed observation shards, detector peaks and ACOM
-# row-level outputs live only under /mnt/data/xietianhong/or4d-clean-v6.
-public/clean_v6_*.h5
-diagnostics/clean_v6_*.h5
-diagnostics/v6_*/
-reports/v6/full_results/
-v6_artifacts/
-observations/
-peaks/v6/
-acom/v6/
-
-# Timing / profiling / debug dumps
-*.prof
-*.profile
-*.trace
-*.dump
-
-# -----------------------------
-# Private benchmark material
-# Never publish hidden labels or answer keys.
-# -----------------------------
-private/
-hidden/
-ground_truth/
-answer_keys/
-data/private/
-data/hidden/
-data/ground_truth/
-data/answer_keys/
-
-# -----------------------------
-# Backups and local archives
-# -----------------------------
-backup_before_*/
-backup_*/
-{{pkgetc}}/
-*.bak
-*.backup
-*.tmp
-*.temp
-*.orig
-*.rej
-*.zip
-*.tar
-*.tar.gz
-*.7z
-
-# -----------------------------
-# Large local caches / downloaded models
-# -----------------------------
-.cache/
-huggingface/
-.huggingface/
-models/
-checkpoints/
-wandb/
-
-# -----------------------------
-# Optional local environment files
-# -----------------------------
+# Local configuration and secrets
 .env
 .env.*
 !.env.example
 
-# -----------------------------
-# Keep empty project directories when needed
-# -----------------------------
-!.gitkeep
+# Build and test output
+build/
+dist/
+*.egg-info/
+.coverage
+htmlcov/
+coverage.xml
 
+# Local data and logs
+data/
+uploads/
+logs/
+*.log
 
-AGENTS.md
-CLAUDE.md
-.cache
-.claude
+# Editors and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
