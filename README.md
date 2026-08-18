@@ -5,13 +5,14 @@
 ## 本地运行
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[test]'
+conda env create -f environment.yml
+conda activate before-choosing-demo
 cp .env.example .env
 # 在 .env 填入 DASHSCOPE_API_KEY
-uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --port 8000
 ```
+
+如果当前 Shell 没有执行 `conda activate`，可以使用 `conda run -n before-choosing-demo` 执行同样的命令。
 
 健康检查：`GET http://localhost:8000/api/v1/health`
 

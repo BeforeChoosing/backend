@@ -1,6 +1,10 @@
 from dataclasses import dataclass
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 def _csv(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())

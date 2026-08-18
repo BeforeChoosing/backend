@@ -78,6 +78,8 @@ class ProfileAgent:
             "协作沟通": ("rose", "Users"),
             "交互体验": ("blue", "PanelsTopLeft"),
         }
+        allowed_claim_levels = {"fact", "interpretation", "hypothesis"}
+        allowed_evidence_types = {"documented_fact", "self_report", "inference"}
         cards: list[CardProposal] = []
         for index, item in enumerate((raw.get("card_proposals") or [])[:5]):
             if not isinstance(item, dict):
@@ -88,6 +90,12 @@ class ProfileAgent:
             color_tone, default_icon = color_by_category[category]
             evidence_quote = str(item.get("evidence_quote") or "用户自述，待进一步核验")[:500]
             title = str(item.get("title") or f"待确认能力 {index + 1}")[:80]
+            claim_level = str(item.get("claim_level") or "interpretation")
+            if claim_level not in allowed_claim_levels:
+                claim_level = "interpretation"
+            evidence_type = str(item.get("evidence_type") or "self_report")
+            if evidence_type not in allowed_evidence_types:
+                evidence_type = "self_report"
             cards.append(
                 CardProposal(
                     id=f"proposal-{trace_id[:8]}-{index + 1}",
@@ -97,8 +105,8 @@ class ProfileAgent:
                     detail=str(item.get("detail") or evidence_quote)[:600],
                     icon=str(item.get("icon") or default_icon),
                     color_tone=color_tone,  # type: ignore[arg-type]
-                    claim_level=str(item.get("claim_level") or "interpretation"),  # type: ignore[arg-type]
-                    evidence_type=str(item.get("evidence_type") or "self_report"),  # type: ignore[arg-type]
+                    claim_level=claim_level,  # type: ignore[arg-type]
+                    evidence_type=evidence_type,  # type: ignore[arg-type]
                     evidence_quote=evidence_quote,
                     source_refs=[str(ref)[:120] for ref in (item.get("source_refs") or [])[:10]]
                     or ["input:experience_text"],
