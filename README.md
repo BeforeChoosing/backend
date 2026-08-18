@@ -1,28 +1,108 @@
 # 选择之前 API
 
-第一条真实链路：经历输入 → ProfileAgent → 百炼 Qwen → 候选证据卡。
+后端负责第一条真实链路：
 
-## 本地运行
+```text
+经历输入 → ProfileAgent → 阿里云百炼 Qwen → 结构化候选证据卡
+```
+
+后端使用 Conda 管理 Python 环境，当前提供 FastAPI API、Qwen 网关和 ProfileAgent。
+
+## 前置条件
+
+- 已安装 Conda（Miniforge 或 Anaconda）。
+- 已准备阿里云百炼/DashScope API Key。
+- macOS/Linux 使用当前命令；Windows 请将 `cp` 改为文件复制命令。
+
+## 第一次安装
+
+在当前目录执行：
 
 ```bash
 conda env create -f environment.yml
 conda activate before-choosing-demo
 cp .env.example .env
-# 在 .env 填入 DASHSCOPE_API_KEY
-python -m uvicorn app.main:app --reload --port 8000
 ```
 
-如果当前 Shell 没有执行 `conda activate`，可以使用 `conda run -n before-choosing-demo` 执行同样的命令。
+然后编辑 `.env`，只在本机填写密钥：
 
-健康检查：`GET http://localhost:8000/api/v1/health`
+```env
+DASHSCOPE_API_KEY=你的百炼密钥
+QWEN_MODEL=qwen-plus
+DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+LLM_REQUEST_TIMEOUT=45
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+```
 
-候选卡接口：`POST http://localhost:8000/api/v1/profile/proposals`
+`.env` 不会提交到 Git。
+
+如果环境已经存在，后续只需：
+
+```bash
+conda activate before-choosing-demo
+```
+
+也可以不激活环境，直接使用 `conda run`：
+
+```bash
+conda run -n before-choosing-demo python -m uvicorn app.main:app --reload --port 8000
+```
+
+## 启动后端
+
+激活环境后执行：
+
+```bash
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+后端地址：<http://127.0.0.1:8000>
+
+接口文档：<http://127.0.0.1:8000/docs>
+
+停止服务：在运行窗口按 `Ctrl+C`。
+
+## 检查服务
+
+```bash
+curl http://127.0.0.1:8000/api/v1/health
+```
+
+正常返回示例：
 
 ```json
 {
-  "experience_text": "我在校园项目中访谈用户并根据反馈调整了方案，最后完成了可用原型。",
-  "target_role": "AI Native 产品经理"
+  "status": "ok",
+  "service": "选择之前 API",
+  "qwen_configured": true,
+  "model": "qwen-plus"
 }
 ```
 
-缺少 `DASHSCOPE_API_KEY` 或 Qwen 返回格式不合法时，接口会返回明确错误，不返回伪造结果。
+## 调用候选卡接口
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "experience_text": "我在校园项目中访谈用户并根据反馈调整了方案，最后完成了可用原型。",
+    "target_role": "AI Native 产品经理"
+  }'
+```
+
+接口只返回候选证据卡，不会直接写入已确认画像。缺少 `DASHSCOPE_API_KEY`、网络不可用或 Qwen 输出无法通过结构化校验时，会返回明确错误，不生成伪造结果。
+
+## 运行测试
+
+```bash
+conda run -n before-choosing-demo pytest -q
+```
+
+## 常见问题
+
+| 现象 | 处理方式 |
+|---|---|
+| `未配置 DASHSCOPE_API_KEY` | 检查当前目录的 `.env`，或确认启动时使用了 `before-choosing-demo` 环境 |
+| 前端提示无法连接后端 | 确认后端正在 `8000` 端口运行 |
+| 前端收到 `503` | 后端可访问，但百炼密钥、额度或网络配置有问题 |
+| 端口被占用 | 将启动命令中的 `--port 8000` 换成其他端口，并同步修改前端 `VITE_API_BASE_URL` |
