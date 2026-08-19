@@ -125,6 +125,19 @@ class ProfileStore:
             ).fetchall()
             return [self._card_from_row(row) for row in rows]
 
+    def get_completed_task_ids(self) -> list[str]:
+        """Return task IDs with submitted observed evidence for the local profile."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT task_id
+                FROM profile_evidence
+                GROUP BY task_id
+                ORDER BY MIN(created_at) ASC, task_id ASC
+                """
+            ).fetchall()
+            return [str(row["task_id"]) for row in rows]
+
     def _record_version(
         self,
         connection: sqlite3.Connection,

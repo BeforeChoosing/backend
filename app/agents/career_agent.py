@@ -9,6 +9,7 @@ from app.schemas.career import (
     CareerSupport,
 )
 from app.schemas.profile import ProfileCard
+from app.schemas.task_catalog import TrialTaskDefinition
 from app.services.llm_gateway import DashScopeQwenGateway
 
 
@@ -17,7 +18,7 @@ class CareerAgent:
 
     SYSTEM_PROMPT = """你是“选择之前”的 CareerAgent，只负责解释一个职业探索路径。
 只能依据用户已经确认的能力卡和给定的岗位知识片段回答，不能补写岗位事实、薪资、公司信息或录用结论。
-本次目标岗位固定为“AI 产品经理”，下一步任务固定为 A-02。
+本次目标岗位固定为“AI 产品经理”。下一步任务已经由后端的确定性选择器从固定任务库选出；你只能解释这个选择，不能改写任务或推荐其他任务。
 每条支持性判断都要引用给定的 citation_id；不能引用不存在的 ID。
 如果材料不足，必须写入 unknowns，不能用常识补齐。
 不要输出匹配百分比、等级或“适合/不适合”的绝对结论。
@@ -36,6 +37,8 @@ class CareerAgent:
         self,
         cards: list[ProfileCard],
         retrieved: list[KnowledgeChunk],
+        next_task: TrialTaskDefinition,
+        next_task_reason: str,
     ) -> CareerRecommendation:
         if not cards:
             raise ValueError("至少需要一张已确认能力卡。")
@@ -50,7 +53,12 @@ class CareerAgent:
             json.dumps(
                 {
                     "target_role": "AI 产品经理",
-                    "next_task_id": "A-02",
+                    "next_task": {
+                        "id": next_task.id,
+                        "title": next_task.title,
+                        "primary_skill": next_task.primary_skill,
+                        "selection_reason": next_task_reason,
+                    },
                     "confirmed_cards": [
                         {
                             "id": card.id,
@@ -78,7 +86,15 @@ class CareerAgent:
                 ensure_ascii=False,
             ),
         )
-        return self._normalize(raw, cards, retrieved, card_ids, citation_ids)
+        return self._normalize(
+            raw,
+            cards,
+            retrieved,
+            card_ids,
+            citation_ids,
+            next_task,
+            next_task_reason,
+        )
 
     @staticmethod
     def _normalize(
@@ -87,6 +103,8 @@ class CareerAgent:
         retrieved: list[KnowledgeChunk],
         card_ids: set[str],
         citation_ids: set[str],
+        next_task: TrialTaskDefinition,
+        next_task_reason: str,
     ) -> CareerRecommendation:
         supports: list[CareerSupport] = []
         for item in (raw.get("supported") or [])[:6]:
@@ -123,7 +141,10 @@ class CareerAgent:
         confidence = str(raw.get("confidence") or "中")
         if confidence not in {"低", "中", "高"}:
             confidence = "中"
-        summary = str(raw.get("summary") or "当前材料支持进入 AI 产品经理试路，但仍需通过 A-02 验证未知项。")[:500]
+        summary = str(
+            raw.get("summary")
+            or f"当前材料支持进入 AI 产品经理试路，下一步通过 {next_task.id} 验证未知项。"
+        )[:500]
         unknowns = [
             str(item).strip()[:240]
             for item in (raw.get("unknowns") or [])[:6]
@@ -132,7 +153,10 @@ class CareerAgent:
         return CareerRecommendation(
             summary=summary,
             supported=supports,
-            unknowns=unknowns or ["尚未通过 A-02 验证 Bad Case 归因和优先级判断。"],
+            unknowns=unknowns or [f"尚未通过 {next_task.id} 验证{next_task.primary_skill}。"],
+            next_task_id=next_task.id,
+            next_task_title=next_task.title,
+            next_task_reason=next_task_reason,
             confidence=confidence,  # type: ignore[arg-type]
             citations=[
                 CareerCitation(

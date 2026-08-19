@@ -49,7 +49,7 @@ class _FakeRetriever:
 
 
 class _FakeCareerAgent:
-    async def recommend(self, cards, retrieved):
+    async def recommend(self, cards, retrieved, next_task, next_task_reason):
         return CareerRecommendation(
             summary=f"已基于 {cards[0].title} 形成 AI 产品经理探索建议。",
             supported=[
@@ -60,6 +60,9 @@ class _FakeCareerAgent:
                 }
             ],
             unknowns=["尚未验证 Bad Case 归因能力。"],
+            next_task_id=next_task.id,
+            next_task_title=next_task.title,
+            next_task_reason=next_task_reason,
             confidence="中",
             citations=[
                 {
@@ -89,7 +92,8 @@ def test_career_recommendation_uses_confirmed_cards_and_citations(tmp_path, monk
     assert response.status_code == 200
     payload = response.json()
     assert payload["role_id"] == "ai_product_manager"
-    assert payload["next_task_id"] == "A-02"
+    assert payload["next_task_id"] == "F-01"
+    assert payload["next_task_title"] == "AI 到底应该进入创作链路的哪一步？"
     assert payload["supported"][0]["citation_ids"] == ["chk-career-1"]
     assert payload["citations"][0]["source_locator"].startswith("jobs/")
 

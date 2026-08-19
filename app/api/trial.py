@@ -12,10 +12,17 @@ from app.schemas.trial import (
     TrialSession,
     TrialSessionCreateRequest,
 )
+from app.schemas.task_catalog import (
+    TrialTaskDefinition,
+    TrialTaskRecommendation,
+    TrialTaskRecommendationRequest,
+)
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
 from app.services.profile_store import ProfileStore
 from app.services.trial_store import TrialStore
+from app.services.task_selector import recommend_trial_task
 from app.tasks.a02 import A02_TASK
+from app.tasks.catalog import list_task_definitions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/trial", tags=["trial"])
@@ -37,6 +44,30 @@ def _get_task(task_id: str) -> A02Task:
     if task_id != A02_TASK.id:
         raise HTTPException(status_code=404, detail="当前最小 Demo 仅提供 A-02 试路任务。")
     return A02_TASK
+
+
+@router.get("/catalog", response_model=list[TrialTaskDefinition])
+def get_trial_catalog() -> list[TrialTaskDefinition]:
+    return list_task_definitions()
+
+
+@router.post("/recommendations", response_model=TrialTaskRecommendation)
+def create_trial_recommendation(
+    request: TrialTaskRecommendationRequest,
+) -> TrialTaskRecommendation:
+    selected_ids = list(dict.fromkeys(request.selected_card_ids))
+    profile_store = _profile_store()
+    cards = profile_store.get_cards_by_ids(selected_ids)
+    if len(cards) != len(selected_ids):
+        raise HTTPException(status_code=422, detail="只能使用已确认的能力卡选择试路任务。")
+    try:
+        return recommend_trial_task(
+            cards,
+            profile_store.get_completed_task_ids(),
+            target_role=request.target_role,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _get_session(session_id: str) -> TrialSession:

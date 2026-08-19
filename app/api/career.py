@@ -9,6 +9,7 @@ from app.knowledge.retriever import KnowledgeRetriever
 from app.schemas.career import CareerRecommendation, CareerRecommendationRequest
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
 from app.services.profile_store import ProfileStore
+from app.services.task_selector import recommend_trial_task
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/career", tags=["career"])
@@ -50,7 +51,17 @@ async def create_career_recommendation(
         )
         if not retrieved:
             raise HTTPException(status_code=503, detail="岗位知识库暂时没有返回可引用片段。")
-        return await _career_agent().recommend(cards, retrieved)
+        task_recommendation = recommend_trial_task(
+            cards,
+            _profile_store().get_completed_task_ids(),
+            target_role=request.target_role,
+        )
+        return await _career_agent().recommend(
+            cards,
+            retrieved,
+            task_recommendation.selected_task,
+            task_recommendation.reason,
+        )
     except HTTPException:
         raise
     except FileNotFoundError as exc:
