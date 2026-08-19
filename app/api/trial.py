@@ -85,6 +85,7 @@ def create_trial_recommendation(
         return recommend_trial_task(
             cards,
             profile_store.get_completed_task_ids(),
+            evidence_records=profile_store.get_evidence_records(),
             target_role=request.target_role,
         )
     except ValueError as exc:
@@ -140,7 +141,7 @@ async def submit_dynamic_trial_session(session_id: str) -> DynamicTrialSession:
         evaluation = await _trial_agent().evaluate_dynamic(task, session.answer)
         observed_evidence = _dynamic_observed_evidence(session, evaluation)
         submitted = _dynamic_trial_store().submit(session_id, observed_evidence, evaluation)
-        _profile_store().record_observed_evidence(session_id, observed_evidence)
+        _profile_store().record_observed_evidence(session_id, observed_evidence, evaluation)
         return submitted
     except LLMGatewayError as exc:
         logger.warning("dynamic trial evaluation failed session_id=%s reason=%s", session_id, exc)
@@ -336,7 +337,7 @@ async def submit_trial_session(session_id: str) -> TrialSession:
         evaluation = await _trial_agent().evaluate(A02_TASK, session.answer)
         observed_evidence = _observed_evidence(session)
         submitted = _trial_store().submit(session_id, observed_evidence, evaluation)
-        _profile_store().record_observed_evidence(session_id, observed_evidence)
+        _profile_store().record_observed_evidence(session_id, observed_evidence, evaluation)
         return submitted
     except LLMGatewayError as exc:
         logger.warning("trial evaluation failed session_id=%s reason=%s", session_id, exc)

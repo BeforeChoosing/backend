@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.trial import ObservedEvidence, TrialEvaluation
+
 
 CardCategory = Literal[
     "洞察分析",
@@ -79,3 +81,21 @@ class ProfileCardsResponse(BaseModel):
     updated_at: datetime | None = None
     cards: list[ProfileCard] = Field(default_factory=list)
     notice: str = "这些是用户确认后的个人画像卡片。"
+
+
+class ProfileEvidenceRecord(BaseModel):
+    """A task-level evidence record written after a submitted trial."""
+
+    session_id: str
+    task_id: str
+    created_at: datetime
+    observed_evidence: ObservedEvidence
+    evaluation: TrialEvaluation | None = None
+
+
+class ProfileOverviewResponse(ProfileCardsResponse):
+    """The data consumed by the profile screen and the next-task selector."""
+
+    evidence: list[ProfileEvidenceRecord] = Field(default_factory=list)
+    completed_task_ids: list[str] = Field(default_factory=list)
+    notice: str = "能力卡来自用户确认，任务证据来自已提交的试路评价。"

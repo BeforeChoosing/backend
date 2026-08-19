@@ -9,6 +9,7 @@ from app.schemas.profile import (
     ConfirmProfileCardsRequest,
     ProfileCardPatchRequest,
     ProfileCardsResponse,
+    ProfileOverviewResponse,
     ProfileProposalRequest,
     ProfileProposalResponse,
 )
@@ -26,6 +27,11 @@ def _profile_store() -> ProfileStore:
 @router.get("/cards", response_model=ProfileCardsResponse)
 def get_profile_cards() -> ProfileCardsResponse:
     return _profile_store().get_profile()
+
+
+@router.get("/overview", response_model=ProfileOverviewResponse)
+def get_profile_overview() -> ProfileOverviewResponse:
+    return _profile_store().get_profile_overview()
 
 
 @router.post("/cards/confirm", response_model=ProfileCardsResponse)

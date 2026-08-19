@@ -10,8 +10,10 @@ from app.schemas.profile import (
     ProfileCard,
     ProfileCardPatchRequest,
     ProfileCardsResponse,
+    ProfileEvidenceRecord,
+    ProfileOverviewResponse,
 )
-from app.schemas.trial import ObservedEvidence
+from app.schemas.trial import ObservedEvidence, TrialEvaluation
 
 
 class ProfileStore:
@@ -60,10 +62,19 @@ class ProfileStore:
                     session_id TEXT NOT NULL UNIQUE,
                     task_id TEXT NOT NULL,
                     evidence_json TEXT NOT NULL,
+                    evaluation_json TEXT,
                     created_at TEXT NOT NULL
                 );
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(profile_evidence)").fetchall()
+            }
+            if "evaluation_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE profile_evidence ADD COLUMN evaluation_json TEXT"
+                )
 
     @staticmethod
     def _now() -> datetime:
@@ -107,6 +118,55 @@ class ProfileStore:
     def get_profile(self) -> ProfileCardsResponse:
         with self._connection() as connection:
             return self._response(connection)
+
+    @staticmethod
+    def _evidence_from_row(row: sqlite3.Row) -> ProfileEvidenceRecord:
+        return ProfileEvidenceRecord(
+            session_id=str(row["session_id"]),
+            task_id=str(row["task_id"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            observed_evidence=ObservedEvidence.model_validate(json.loads(row["evidence_json"])),
+            evaluation=(
+                TrialEvaluation.model_validate(json.loads(row["evaluation_json"]))
+                if row["evaluation_json"]
+                else None
+            ),
+        )
+
+    def get_evidence_records(self) -> list[ProfileEvidenceRecord]:
+        """Return submitted task evidence in reverse chronological order."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT session_id, task_id, evidence_json, evaluation_json, created_at
+                FROM profile_evidence
+                ORDER BY created_at DESC, session_id DESC
+                """
+            ).fetchall()
+            return [self._evidence_from_row(row) for row in rows]
+
+    def get_profile_overview(self) -> ProfileOverviewResponse:
+        with self._connection() as connection:
+            cards = self._cards_from_connection(connection)
+            latest = connection.execute(
+                "SELECT version, created_at FROM profile_versions ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+            evidence_rows = connection.execute(
+                """
+                SELECT session_id, task_id, evidence_json, evaluation_json, created_at
+                FROM profile_evidence
+                ORDER BY created_at DESC, session_id DESC
+                """
+            ).fetchall()
+            evidence = [self._evidence_from_row(row) for row in evidence_rows]
+            completed = list(dict.fromkeys(record.task_id for record in evidence))
+            return ProfileOverviewResponse(
+                version=int(latest["version"]) if latest else 0,
+                updated_at=(datetime.fromisoformat(latest["created_at"]) if latest else None),
+                cards=cards,
+                evidence=evidence,
+                completed_task_ids=completed,
+            )
 
     def get_cards_by_ids(self, card_ids: list[str]) -> list[ProfileCard]:
         """Return only confirmed cards selected for the current career journey."""
@@ -287,6 +347,7 @@ class ProfileStore:
         self,
         session_id: str,
         evidence: ObservedEvidence,
+        evaluation: TrialEvaluation | None = None,
     ) -> ProfileCardsResponse:
         """Write task evidence into the same local profile version stream."""
         timestamp = self._now()
@@ -295,18 +356,31 @@ class ProfileStore:
                 "SELECT 1 FROM profile_evidence WHERE session_id = ?", (session_id,)
             ).fetchone()
             if existing:
+                if evaluation is not None:
+                    connection.execute(
+                        "UPDATE profile_evidence SET evaluation_json = ? WHERE session_id = ?",
+                        (
+                            json.dumps(evaluation.model_dump(mode="json"), ensure_ascii=False),
+                            session_id,
+                        ),
+                    )
                 return self._response(connection)
 
             connection.execute(
                 """
-                INSERT INTO profile_evidence (id, session_id, task_id, evidence_json, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO profile_evidence (
+                    id, session_id, task_id, evidence_json, evaluation_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     f"evidence-{session_id}",
                     session_id,
                     evidence.task_id,
                     json.dumps(evidence.model_dump(mode="json"), ensure_ascii=False),
+                    json.dumps(evaluation.model_dump(mode="json"), ensure_ascii=False)
+                    if evaluation is not None
+                    else None,
                     timestamp.isoformat(),
                 ),
             )

@@ -54,6 +54,7 @@ async def create_career_recommendation(
         task_recommendation = recommend_trial_task(
             cards,
             _profile_store().get_completed_task_ids(),
+            evidence_records=_profile_store().get_evidence_records(),
             target_role=request.target_role,
         )
         return await _career_agent().recommend(

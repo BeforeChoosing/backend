@@ -1,6 +1,6 @@
 from collections import Counter
 
-from app.schemas.profile import ProfileCard
+from app.schemas.profile import ProfileCard, ProfileEvidenceRecord
 from app.schemas.task_catalog import TaskId, TrialTaskCandidate, TrialTaskRecommendation
 from app.tasks.catalog import TASK_CATALOG
 
@@ -82,6 +82,7 @@ def recommend_trial_task(
     cards: list[ProfileCard],
     completed_task_ids: list[str],
     *,
+    evidence_records: list[ProfileEvidenceRecord] | None = None,
     target_role: str = "AI 产品经理",
 ) -> TrialTaskRecommendation:
     """Rank the fixed task catalog without asking the LLM to create or rewrite tasks."""
@@ -89,6 +90,30 @@ def recommend_trial_task(
         raise ValueError("至少需要一张已确认能力卡。")
 
     text = _normalized_text(cards, target_role)
+    evidence_text_parts: list[str] = []
+    for record in evidence_records or []:
+        evidence = record.observed_evidence
+        evaluation = record.evaluation
+        evidence_text_parts.extend(
+            [
+                evidence.statement,
+                evidence.primary_ability or "",
+                evidence.level_reason or "",
+                " ".join(evidence.caveats),
+            ]
+        )
+        if evaluation is not None:
+            evidence_text_parts.extend(
+                [
+                    evaluation.primary_ability,
+                    evaluation.level_reason,
+                    evaluation.next_step,
+                    " ".join(evaluation.gaps),
+                    " ".join(evaluation.strengths),
+                ]
+            )
+    evidence_text = " ".join(evidence_text_parts).lower()
+    text = f"{text} {evidence_text}".strip()
     skill_scores: Counter[str] = Counter()
     for card in cards:
         pending_multiplier = 1.2 if card.pending_verification else 1.0
@@ -107,6 +132,18 @@ def recommend_trial_task(
         score += sum(skill_scores[skill] * 0.25 for skill in task.supporting_skills)
         score += sum(1.5 for keyword in TRACK_KEYWORDS[task.track] if keyword in text)
         score += sum(3.0 for keyword in TASK_KEYWORDS[task_id] if keyword in text)
+        if evidence_records:
+            latest = evidence_records[0]
+            latest_evaluation = latest.evaluation
+            if latest_evaluation is not None:
+                if latest_evaluation.primary_ability == task.primary_skill:
+                    score += 4.0
+                if latest_evaluation.confidence == "低":
+                    score += 2.0
+                if latest_evaluation.observed_level in {"L1", "L2", "证据不足"}:
+                    score += 1.5
+                if any(keyword in latest_evaluation.next_step.lower() for keyword in TASK_KEYWORDS[task_id]):
+                    score += 2.5
         ranked.append((task_id, round(score, 2)))
 
     order = {task_id: index for index, task_id in enumerate(TASK_CATALOG)}
