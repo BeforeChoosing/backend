@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app.api import trial as trial_api
 from app.main import app
 from app.schemas.trial import TrialDimensionEvaluation, TrialEvaluation
+from app.services.dynamic_trial_store import DynamicTrialStore
 from app.services.profile_store import ProfileStore
 from app.services.trial_store import TrialStore
 
@@ -21,6 +22,29 @@ class FakeTrialAgent:
             strengths=["保留了不确定性"],
             gaps=["需要继续补充跨任务证据"],
             next_step="完成第二个不同 Task Atom 的试路任务。",
+            confidence="中",
+        )
+
+    async def evaluate_dynamic(self, task, answer):
+        return TrialEvaluation(
+            summary="完成了固定五步交付与事件后调整。",
+            dimensions=[
+                TrialDimensionEvaluation(
+                    dimension=item.dimension,
+                    weight=item.weight,
+                    score=82,
+                    evidence="回答包含可追溯判断和事件后取舍。",
+                )
+                for item in task.rubric
+            ],
+            primary_ability=task.primary_skill,
+            observed_level="L3",
+            level_reason="能结合材料形成判断并给出最小验证。",
+            process_evidence=["完成五步作答", "事件后调整了方案"],
+            coach_dependency="方向性提示" if answer.coach_usage else "独立完成",
+            strengths=["判断与验证对应"],
+            gaps=["需要补充竞争性假设"],
+            next_step="换一个 Task Atom 继续验证同一能力。",
             confidence="中",
         )
 
@@ -89,3 +113,60 @@ def test_trial_api_requires_event_and_returns_observed_evidence(tmp_path, monkey
     assert payload["status"] == "submitted"
     assert payload["observed_evidence"]["task_id"] == "A-02"
     assert profile_store.get_profile().version == 1
+
+
+def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch):
+    dynamic_store = DynamicTrialStore(tmp_path / "dynamic.db")
+    profile_store = ProfileStore(tmp_path / "profile.db")
+    monkeypatch.setattr(trial_api, "_dynamic_trial_store", lambda: dynamic_store)
+    monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
+    monkeypatch.setattr(trial_api, "_trial_agent", lambda: FakeTrialAgent())
+    client = TestClient(app)
+
+    task = client.get("/api/v1/trial/catalog/F-01")
+    assert task.status_code == 200
+    assert sum(item["weight"] for item in task.json()["rubric"]) == 100
+    assert set(task.json()["level_anchors"]) == {"L1", "L2", "L3", "L4", "L5"}
+
+    created = client.post(
+        "/api/v1/trial/workbench/sessions",
+        json={"task_id": "F-01"},
+    )
+    session_id = created.json()["id"]
+    coach = client.post(
+        f"/api/v1/trial/workbench/sessions/{session_id}/coach",
+        json={"level": 2},
+    )
+    assert coach.status_code == 200
+
+    saved = client.put(
+        f"/api/v1/trial/workbench/sessions/{session_id}/answer",
+        json={
+            "answer": {
+                "step_answers": {
+                    "problem": "优先解决素材整理阻塞。",
+                    "evidence": "引用反馈与创作漏斗。",
+                    "flow": "AI整理候选，用户确认；首版不自动发布。",
+                    "validation": "测试完成率，低于基线则停止。",
+                    "event": "周期缩短后收缩到一个整理节点。",
+                },
+                "viewed_material_ids": ["background", "constraints"],
+                "evidence_refs": ["background", "constraints"],
+                "event_decision": "调整",
+                "event_response": "只保留一个模型调用节点。",
+            }
+        },
+    )
+    assert saved.status_code == 200
+    assert len(saved.json()["answer"]["coach_usage"]) == 1
+
+    client.post(f"/api/v1/trial/workbench/sessions/{session_id}/event")
+    submitted = client.post(
+        f"/api/v1/trial/workbench/sessions/{session_id}/submit"
+    )
+    assert submitted.status_code == 200
+    evidence = submitted.json()["observed_evidence"]
+    assert evidence["observed_level"] == "L3"
+    assert evidence["primary_ability"] == "用户洞察"
+    assert evidence["coach_dependency"] == "方向性提示"
+    assert profile_store.get_completed_task_ids() == ["F-01"]

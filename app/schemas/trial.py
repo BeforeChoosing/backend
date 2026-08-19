@@ -107,17 +107,35 @@ class ObservedEvidence(BaseModel):
     completed_steps: list[str]
     evidence_refs: list[str]
     caveats: list[str]
+    primary_ability: str | None = None
+    observed_level: Literal["L1", "L2", "L3", "L4", "L5", "证据不足"] | None = None
+    level_reason: str | None = None
+    confidence: Literal["低", "中", "高"] | None = None
+    coach_dependency: Literal["独立完成", "轻度提示", "方向性提示", "强提示"] | None = None
 
 
 class TrialDimensionEvaluation(BaseModel):
     dimension: str
+    weight: int = Field(default=0, ge=0, le=100)
     score: int = Field(ge=0, le=100)
     evidence: str = Field(max_length=500)
+
+
+class TrialAbilityEvidence(BaseModel):
+    ability: str
+    observed_level: Literal["L1", "L2", "L3", "L4", "L5", "证据不足"]
+    evidence: str = Field(max_length=600)
 
 
 class TrialEvaluation(BaseModel):
     summary: str = Field(max_length=600)
     dimensions: list[TrialDimensionEvaluation] = Field(max_length=8)
+    primary_ability: str = ""
+    observed_level: Literal["L1", "L2", "L3", "L4", "L5", "证据不足"] = "证据不足"
+    level_reason: str = Field(default="", max_length=600)
+    supporting_evidence: list[TrialAbilityEvidence] = Field(default_factory=list, max_length=2)
+    process_evidence: list[str] = Field(default_factory=list, max_length=6)
+    coach_dependency: Literal["独立完成", "轻度提示", "方向性提示", "强提示"] = "独立完成"
     strengths: list[str] = Field(max_length=5)
     gaps: list[str] = Field(max_length=5)
     next_step: str = Field(max_length=300)

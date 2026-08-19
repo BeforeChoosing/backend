@@ -4,6 +4,23 @@ from app.schemas.task_catalog import (
     TrialTaskRubricCriterion,
     TrialTaskStep,
 )
+from app.tasks.evaluation_rules import TASK_EVALUATION_RULES
+
+
+TASK_ESTIMATED_MINUTES = {
+    "F-01": "15–18 分钟",
+    "F-02": "12–15 分钟",
+    "F-03": "15–20 分钟",
+    "A-01": "15–18 分钟",
+    "A-02": "15–20 分钟",
+    "A-03": "15–18 分钟",
+    "P-01": "15–20 分钟",
+    "P-02": "12–15 分钟",
+    "P-03": "15–20 分钟",
+    "M-01": "12–15 分钟",
+    "M-02": "15–18 分钟",
+    "M-03": "15–20 分钟",
+}
 
 
 def _step(
@@ -372,3 +389,21 @@ def get_task_definition(task_id: str) -> TrialTaskDefinition:
 
 def list_task_definitions() -> list[TrialTaskDefinition]:
     return list(TASK_CATALOG.values())
+
+
+for _task_id, _task_definition in TASK_CATALOG.items():
+    _rules = TASK_EVALUATION_RULES[_task_id]
+    _task_definition.rubric = [
+        TrialTaskRubricCriterion(
+            dimension=dimension,
+            weight=weight,
+            observable_behavior=behavior,
+        )
+        for dimension, weight, behavior in _rules["rubric"]  # type: ignore[assignment]
+    ]
+    _task_definition.primary_skill = _task_definition.rubric[0].dimension
+    _task_definition.supporting_skills = [
+        item.dimension for item in _task_definition.rubric[1:3]
+    ]
+    _task_definition.level_anchors = _rules["anchors"]  # type: ignore[assignment]
+    _task_definition.estimated_minutes = TASK_ESTIMATED_MINUTES[_task_id]

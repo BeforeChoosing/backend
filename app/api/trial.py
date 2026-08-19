@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
@@ -13,16 +14,24 @@ from app.schemas.trial import (
     TrialSessionCreateRequest,
 )
 from app.schemas.task_catalog import (
+    DynamicTrialAnswer,
+    DynamicTrialAnswerUpdateRequest,
+    DynamicTrialCoachRequest,
+    DynamicTrialCoachResponse,
+    DynamicTrialCoachUsage,
+    DynamicTrialSession,
+    DynamicTrialSessionCreateRequest,
     TrialTaskDefinition,
     TrialTaskRecommendation,
     TrialTaskRecommendationRequest,
 )
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
+from app.services.dynamic_trial_store import DynamicTrialStore
 from app.services.profile_store import ProfileStore
 from app.services.trial_store import TrialStore
 from app.services.task_selector import recommend_trial_task
 from app.tasks.a02 import A02_TASK
-from app.tasks.catalog import list_task_definitions
+from app.tasks.catalog import get_task_definition, list_task_definitions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/trial", tags=["trial"])
@@ -40,6 +49,10 @@ def _profile_store() -> ProfileStore:
     return ProfileStore(get_settings().profile_db_path)
 
 
+def _dynamic_trial_store() -> DynamicTrialStore:
+    return DynamicTrialStore(get_settings().profile_db_path)
+
+
 def _get_task(task_id: str) -> A02Task:
     if task_id != A02_TASK.id:
         raise HTTPException(status_code=404, detail="当前最小 Demo 仅提供 A-02 试路任务。")
@@ -49,6 +62,14 @@ def _get_task(task_id: str) -> A02Task:
 @router.get("/catalog", response_model=list[TrialTaskDefinition])
 def get_trial_catalog() -> list[TrialTaskDefinition]:
     return list_task_definitions()
+
+
+@router.get("/catalog/{task_id}", response_model=TrialTaskDefinition)
+def get_trial_catalog_task(task_id: str) -> TrialTaskDefinition:
+    try:
+        return get_task_definition(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="试路任务不存在。") from exc
 
 
 @router.post("/recommendations", response_model=TrialTaskRecommendation)
@@ -70,11 +91,139 @@ def create_trial_recommendation(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/workbench/sessions", response_model=DynamicTrialSession)
+def create_dynamic_trial_session(
+    request: DynamicTrialSessionCreateRequest,
+) -> DynamicTrialSession:
+    get_task_definition(request.task_id)
+    return _dynamic_trial_store().create_session(request.task_id)
+
+
+@router.get("/workbench/sessions/{session_id}", response_model=DynamicTrialSession)
+def get_dynamic_trial_session(session_id: str) -> DynamicTrialSession:
+    return _get_dynamic_session(session_id)
+
+
+@router.put("/workbench/sessions/{session_id}/answer", response_model=DynamicTrialSession)
+def save_dynamic_trial_answer(
+    session_id: str,
+    request: DynamicTrialAnswerUpdateRequest,
+) -> DynamicTrialSession:
+    try:
+        return _dynamic_trial_store().save_answer(session_id, request.answer)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="试路会话不存在。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/workbench/sessions/{session_id}/event", response_model=DynamicTrialSession)
+def reveal_dynamic_trial_event(session_id: str) -> DynamicTrialSession:
+    try:
+        return _dynamic_trial_store().reveal_event(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="试路会话不存在。") from exc
+
+
+@router.post("/workbench/sessions/{session_id}/submit", response_model=DynamicTrialSession)
+async def submit_dynamic_trial_session(session_id: str) -> DynamicTrialSession:
+    session = _get_dynamic_session(session_id)
+    if session.status == "submitted":
+        return session
+    _validate_dynamic_answer(
+        session.task_id,
+        session.answer,
+        event_revealed=session.event_revealed,
+    )
+    task = get_task_definition(session.task_id)
+    try:
+        evaluation = await _trial_agent().evaluate_dynamic(task, session.answer)
+        observed_evidence = _dynamic_observed_evidence(session, evaluation)
+        submitted = _dynamic_trial_store().submit(session_id, observed_evidence, evaluation)
+        _profile_store().record_observed_evidence(session_id, observed_evidence)
+        return submitted
+    except LLMGatewayError as exc:
+        logger.warning("dynamic trial evaluation failed session_id=%s reason=%s", session_id, exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        logger.warning("dynamic trial evaluation invalid session_id=%s reason=%s", session_id, exc)
+        raise HTTPException(status_code=502, detail="Qwen 评价未通过结构化校验，请稍后重试。") from exc
+
+
+@router.post(
+    "/workbench/sessions/{session_id}/coach",
+    response_model=DynamicTrialCoachResponse,
+)
+def use_dynamic_trial_coach(
+    session_id: str,
+    request: DynamicTrialCoachRequest,
+) -> DynamicTrialCoachResponse:
+    session = _get_dynamic_session(session_id)
+    task = get_task_definition(session.task_id)
+    prompt = task.coach_prompts[request.level - 1]
+    usage = DynamicTrialCoachUsage(
+        level=request.level,
+        prompt=prompt,
+        used_at=datetime.now(timezone.utc),
+    )
+    try:
+        _dynamic_trial_store().record_coach_usage(session_id, usage)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return DynamicTrialCoachResponse(prompt=prompt, usage=usage)
+
+
 def _get_session(session_id: str) -> TrialSession:
     try:
         return _trial_store().get_session(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="试路会话不存在。") from exc
+
+
+def _get_dynamic_session(session_id: str) -> DynamicTrialSession:
+    try:
+        return _dynamic_trial_store().get_session(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="试路会话不存在。") from exc
+
+
+def _validate_dynamic_answer(task_id: str, answer: DynamicTrialAnswer, *, event_revealed: bool) -> None:
+    task = get_task_definition(task_id)
+    missing = [
+        step.title
+        for step in task.steps
+        if not answer.step_answers.get(step.id, "").strip()
+    ]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"请先完成：{'、'.join(missing)}。")
+    if not event_revealed:
+        raise HTTPException(status_code=422, detail="请先接收中途事件并完成重新决策。")
+    if answer.event_decision is None or not answer.event_response.strip():
+        raise HTTPException(status_code=422, detail="请填写中途事件后的维持或调整决定及依据。")
+
+
+def _dynamic_observed_evidence(
+    session: DynamicTrialSession,
+    evaluation,
+) -> ObservedEvidence:
+    task = get_task_definition(session.task_id)
+    return ObservedEvidence(
+        task_id=task.id,
+        statement=f"用户完成了 {task.id}《{task.title}》的五步试路任务和事件后重新决策。",
+        completed_steps=[step.title for step in task.steps],
+        evidence_refs=session.answer.evidence_refs or [
+            step.id for step in task.steps if session.answer.step_answers.get(step.id, "").strip()
+        ],
+        caveats=[
+            "本次任务只形成 Observed Evidence，不等同于岗位胜任力认证。",
+            "任务情境与业务数字均为模拟试路材料。",
+        ],
+        primary_ability=evaluation.primary_ability,
+        observed_level=evaluation.observed_level,
+        level_reason=evaluation.level_reason,
+        confidence=evaluation.confidence,
+        coach_dependency=evaluation.coach_dependency,
+    )
 
 
 def _validate_answer(answer: A02Answer, *, event_revealed: bool) -> None:
