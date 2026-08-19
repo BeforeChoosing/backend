@@ -123,5 +123,5 @@ class ProfileAgent:
             trace_id=trace_id,
             experience=experience,
             card_proposals=cards,
-            next_question=str(raw.get("next_question") or "你在这段经历中本人具体负责了哪一步？")[:300],
+            next_question=str(raw.get("next_question") or "补充本人在该经历中具体负责的环节。")[:300],
         )
