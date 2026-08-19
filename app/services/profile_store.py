@@ -108,6 +108,23 @@ class ProfileStore:
         with self._connection() as connection:
             return self._response(connection)
 
+    def get_cards_by_ids(self, card_ids: list[str]) -> list[ProfileCard]:
+        """Return only confirmed cards selected for the current career journey."""
+        if not card_ids:
+            return []
+        placeholders = ",".join("?" for _ in card_ids)
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT card_json
+                FROM profile_cards
+                WHERE id IN ({placeholders})
+                ORDER BY created_at ASC, id ASC
+                """,
+                card_ids,
+            ).fetchall()
+            return [self._card_from_row(row) for row in rows]
+
     def _record_version(
         self,
         connection: sqlite3.Connection,

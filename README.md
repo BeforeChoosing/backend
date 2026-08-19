@@ -6,7 +6,7 @@
 经历输入 → ProfileAgent → 阿里云百炼 Qwen → 结构化候选证据卡
 ```
 
-后端使用 Conda 管理 Python 环境，当前提供 FastAPI API、Qwen 网关和 ProfileAgent。
+后端使用 Conda 管理 Python 环境，当前提供 FastAPI API、Qwen 网关、ProfileAgent、CareerAgent 和本地岗位知识库检索。
 
 当前版本仅用于 macOS、Linux 或 Windows 电脑上的本机运行，不涉及服务器部署。后端默认监听 `127.0.0.1:8000`。
 
@@ -47,6 +47,8 @@ CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 `.env` 不会提交到 Git。
 
 `.env` 是后端本机配置文件。百炼密钥只保存在该文件中，由后端进程读取；不要复制到前端 `.env.local`。
+
+本地岗位知识库默认位于仓库内的 `knowledge/public/`，索引文件为 `knowledge.db`。两者均不包含密钥，索引文件已加入 Git 忽略规则。
 
 如果环境已经存在，后续只需：
 
@@ -125,6 +127,24 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 
 单次任务只形成 `Observed Evidence`，不直接生成岗位胜任力等级或企业认证结论。
 
+## 本地岗位 RAG 与职业推演
+
+职业探索页只读取已确认能力卡。后端将能力卡内容与本地岗位资料组合成检索词，在 SQLite FTS5 索引中检索 AI 产品经理岗位片段，再把检索片段和引用 ID 交给 Qwen 生成结构化推演。前端不会直接请求百炼，也不会接触 API Key。
+
+知识库资料来自项目提供的 `公共RAG知识库` 解压内容，已按文档登记 `document_id`、资料级别和来源说明。当前岗位文档属于公开资料交叉归纳稿，原始 JD 链接尚待补齐，因此界面会显示资料级别和来源提示，不将归纳稿当作官方岗位结论。
+
+首次安装或更新 Markdown 资料后，在后端仓库根目录执行索引构建：
+
+```bash
+conda run -n before-choosing-demo python -m app.knowledge.indexer
+```
+
+Windows PowerShell 使用同一条命令。服务启动时也会检查文件指纹并自动建立缺失索引。
+
+职业推演接口：
+
+- `POST /api/v1/career/recommendations`：提交 1–4 个已确认能力卡 ID，返回 AI 产品经理路径摘要、支持性判断、未知项、A-02 下一步和本地引用片段。
+
 ## 本地画像持久化
 
 用户点击“加入能力库”后，已确认卡片会写入本机 SQLite 文件。`PROFILE_DB_PATH` 用于指定文件位置，默认值为 `profile.db`；该文件已加入 Git 忽略规则，不会提交到仓库。
@@ -152,3 +172,4 @@ conda run -n before-choosing-demo pytest -q
 | 前端提示无法连接后端 | 确认后端正在 `8000` 端口运行 |
 | 前端收到 `503` | 后端可访问，但百炼密钥、额度或网络配置有问题 |
 | 端口被占用 | 将启动命令中的 `--port 8000` 换成其他端口，并同步修改前端 `VITE_API_BASE_URL` |
+| 职业推演提示知识库未准备完成 | 在后端仓库根目录运行 `conda run -n before-choosing-demo python -m app.knowledge.indexer`，确认 `knowledge/public/` 中存在 Markdown 资料 |

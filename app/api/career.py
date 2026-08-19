@@ -1,0 +1,64 @@
+import logging
+from functools import lru_cache
+
+from fastapi import APIRouter, HTTPException
+
+from app.agents.career_agent import CareerAgent
+from app.config import get_settings
+from app.knowledge.retriever import KnowledgeRetriever
+from app.schemas.career import CareerRecommendation, CareerRecommendationRequest
+from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
+from app.services.profile_store import ProfileStore
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/career", tags=["career"])
+AI_PRODUCT_MANAGER_DOCUMENT_ID = "job-ai-product-manager-v1"
+
+
+def _profile_store() -> ProfileStore:
+    return ProfileStore(get_settings().profile_db_path)
+
+
+@lru_cache(maxsize=1)
+def _knowledge_retriever() -> KnowledgeRetriever:
+    settings = get_settings()
+    return KnowledgeRetriever(settings.knowledge_dir, settings.knowledge_db_path)
+
+
+def _career_agent() -> CareerAgent:
+    return CareerAgent(DashScopeQwenGateway(get_settings()))
+
+
+@router.post("/recommendations", response_model=CareerRecommendation)
+async def create_career_recommendation(
+    request: CareerRecommendationRequest,
+) -> CareerRecommendation:
+    selected_ids = list(dict.fromkeys(request.selected_card_ids))
+    cards = _profile_store().get_cards_by_ids(selected_ids)
+    if len(cards) != len(selected_ids):
+        raise HTTPException(status_code=422, detail="只能使用已确认的能力卡进行职业推演。")
+
+    query = "AI 产品经理 " + " ".join(
+        f"{card.title} {card.category} {card.description} {card.detail}" for card in cards
+    )
+    try:
+        retrieved = _knowledge_retriever().search(
+            query,
+            corpus="career",
+            document_id=AI_PRODUCT_MANAGER_DOCUMENT_ID,
+            limit=5,
+        )
+        if not retrieved:
+            raise HTTPException(status_code=503, detail="岗位知识库暂时没有返回可引用片段。")
+        return await _career_agent().recommend(cards, retrieved)
+    except HTTPException:
+        raise
+    except FileNotFoundError as exc:
+        logger.exception("career knowledge corpus unavailable")
+        raise HTTPException(status_code=503, detail="岗位知识库未准备完成，请先构建本地索引。") from exc
+    except LLMGatewayError as exc:
+        logger.warning("career recommendation failed reason=%s", exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (ValueError, TypeError) as exc:
+        logger.warning("career recommendation invalid reason=%s", exc)
+        raise HTTPException(status_code=502, detail="职业推荐未通过结构化校验，请稍后重试。") from exc

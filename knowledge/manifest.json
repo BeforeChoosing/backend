@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "corpus": "public-career-demo",
+  "documents": [
+    {
+      "path": "capability_method.md",
+      "document_id": "method-capability-v1",
+      "corpus": "capability_method",
+      "trust_level": "secondary_summary",
+      "source_note": "公共 RAG 知识库整理稿，进入 Demo 前需人工复核。"
+    },
+    {
+      "path": "job_search_workflow.md",
+      "document_id": "method-job-search-v1",
+      "corpus": "capability_method",
+      "trust_level": "secondary_summary",
+      "source_note": "公共 RAG 知识库整理稿，进入 Demo 前需人工复核。"
+    },
+    {
+      "path": "tools_reference.md",
+      "document_id": "method-tools-v1",
+      "corpus": "capability_method",
+      "trust_level": "secondary_summary",
+      "source_note": "公共 RAG 知识库整理稿，进入 Demo 前需人工复核。"
+    },
+    {
+      "path": "职业价值观.md",
+      "document_id": "values-v1",
+      "corpus": "career",
+      "trust_level": "secondary_summary",
+      "source_note": "公共 RAG 知识库整理稿，进入 Demo 前需人工复核。"
+    },
+    {
+      "path": "jobs/ai_product_manager.md",
+      "document_id": "job-ai-product-manager-v1",
+      "corpus": "career",
+      "trust_level": "secondary_summary",
+      "source_note": "基于公开 JD 的交叉归纳稿；原始 JD URL 尚待补齐。"
+    },
+    {
+      "path": "jobs/user_experience_designer.md",
+      "document_id": "job-user-experience-designer-v1",
+      "corpus": "career",
+      "trust_level": "secondary_summary",
+      "source_note": "基于公开资料的交叉归纳稿；原始 URL 尚待补齐。"
+    }
+  ]
+}

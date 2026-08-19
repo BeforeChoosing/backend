@@ -22,6 +22,8 @@ class Settings:
     qwen_model: str = os.getenv("QWEN_MODEL", "qwen-plus")
     request_timeout_seconds: float = float(os.getenv("LLM_REQUEST_TIMEOUT", "45"))
     profile_db_path: str = os.getenv("PROFILE_DB_PATH", "profile.db")
+    knowledge_dir: str = os.getenv("KNOWLEDGE_DIR", "knowledge/public")
+    knowledge_db_path: str = os.getenv("KNOWLEDGE_DB_PATH", "knowledge.db")
     cors_origins: tuple[str, ...] = _csv(
         os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
     )
