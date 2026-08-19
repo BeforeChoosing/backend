@@ -116,7 +116,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 
 当前 Demo 接入 CoachAgent 任务库中的 12 个已校准任务，覆盖 Feature、Application / Agent、Platform / Developer、Model / Eval / Data 四类 AI 产品经理方向。任务材料、五步作答 Schema、中途事件、三级 Coach 提示、Rubric 权重和 L1–L5 行为锚点均来自 Demo 资料；模拟业务数据和案例在接口中明确标识。
 
-后端选择器根据已确认能力卡、待验证描述、目标岗位和已完成任务进行确定性排序。Qwen 不参与任务选择，不生成或改写题目。同样输入得到同样排序；存在未完成任务时会跳过已形成 Observed Evidence 的任务。
+后端选择器根据已确认能力卡、待验证描述、目标岗位、最近评价中的主测能力/等级/置信度/下一步建议和已完成任务进行确定性排序。Qwen 不参与任务选择，不生成或改写题目。同样输入得到同样排序；存在未完成任务时会跳过已形成 Observed Evidence 的任务。
 
 试路接口：
 
@@ -159,6 +159,7 @@ Windows PowerShell 使用同一条命令。服务启动时也会检查文件指�
 画像接口：
 
 - `GET /api/v1/profile/cards`：读取已确认卡片，页面刷新后恢复。
+- `GET /api/v1/profile/overview`：读取已确认卡片、任务评价证据、评价结果和已完成任务 ID，供个人档案和下一任务选择使用。
 - `POST /api/v1/profile/cards/confirm`：确认并保存候选卡片，同时记录画像版本。
 - `PATCH /api/v1/profile/cards/{card_id}`：更新卡片文字内容。
 - `DELETE /api/v1/profile/cards/{card_id}`：删除卡片。
