@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -52,3 +53,29 @@ class ProfileProposalResponse(BaseModel):
     card_proposals: list[CardProposal] = Field(max_length=5)
     next_question: str = Field(min_length=1, max_length=300)
     notice: str = "这些内容是候选证据，确认前不会写入你的长期画像。"
+
+
+class ProfileCard(CardProposal):
+    status: Literal["confirmed"] = "confirmed"
+    source_trace_id: str | None = Field(default=None, max_length=100)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConfirmProfileCardsRequest(BaseModel):
+    cards: list[CardProposal] = Field(min_length=1, max_length=20)
+    trace_id: str | None = Field(default=None, max_length=100)
+
+
+class ProfileCardPatchRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    description: str | None = Field(default=None, min_length=1, max_length=240)
+    detail: str | None = Field(default=None, min_length=1, max_length=600)
+    workplace_application: str | None = Field(default=None, min_length=1, max_length=300)
+
+
+class ProfileCardsResponse(BaseModel):
+    version: int
+    updated_at: datetime | None = None
+    cards: list[ProfileCard] = Field(default_factory=list)
+    notice: str = "这些是用户确认后的个人画像卡片。"

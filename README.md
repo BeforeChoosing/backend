@@ -40,6 +40,7 @@ DASHSCOPE_API_KEY=你的百炼密钥
 QWEN_MODEL=qwen-plus
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
 LLM_REQUEST_TIMEOUT=45
+PROFILE_DB_PATH=profile.db
 CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ```
 
@@ -108,6 +109,19 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 ```
 
 接口只返回候选证据卡，不会直接写入已确认画像。缺少 `DASHSCOPE_API_KEY`、网络不可用或 Qwen 输出无法通过结构化校验时，会返回明确错误，不生成伪造结果。
+
+## 本地画像持久化
+
+用户点击“加入能力库”后，已确认卡片会写入本机 SQLite 文件。`PROFILE_DB_PATH` 用于指定文件位置，默认值为 `profile.db`；该文件已加入 Git 忽略规则，不会提交到仓库。
+
+画像接口：
+
+- `GET /api/v1/profile/cards`：读取已确认卡片，页面刷新后恢复。
+- `POST /api/v1/profile/cards/confirm`：确认并保存候选卡片，同时记录画像版本。
+- `PATCH /api/v1/profile/cards/{card_id}`：更新卡片文字内容。
+- `DELETE /api/v1/profile/cards/{card_id}`：删除卡片。
+
+重置本机 Demo 画像时，先停止后端，再删除 `profile.db`；Windows PowerShell 使用 `Remove-Item profile.db`。
 
 ## 运行测试
 
