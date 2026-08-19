@@ -2,9 +2,11 @@ from app.schemas.task_catalog import (
     TrialTaskDefinition,
     TrialTaskEvent,
     TrialTaskRubricCriterion,
+    TrialTaskMaterial,
     TrialTaskStep,
 )
 from app.tasks.evaluation_rules import TASK_EVALUATION_RULES
+from app.tasks.source_content import TASK_SOURCE_CONTENT
 
 
 TASK_ESTIMATED_MINUTES = {
@@ -407,3 +409,15 @@ for _task_id, _task_definition in TASK_CATALOG.items():
     ]
     _task_definition.level_anchors = _rules["anchors"]  # type: ignore[assignment]
     _task_definition.estimated_minutes = TASK_ESTIMATED_MINUTES[_task_id]
+    _source = TASK_SOURCE_CONTENT[_task_id]
+    _task_definition.materials = [
+        TrialTaskMaterial(id=material_id, title=title, kind=kind, content=content)
+        for material_id, title, kind, content in _source["materials"]  # type: ignore[assignment]
+    ]
+    _actor, _message, _instruction = _source["event"]  # type: ignore[misc]
+    _task_definition.event = TrialTaskEvent(
+        actor=_actor,
+        message=_message,
+        instruction=_instruction,
+    )
+    _task_definition.coach_prompts = _source["coach"]  # type: ignore[assignment]

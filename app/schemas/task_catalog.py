@@ -32,6 +32,14 @@ class TrialTaskRubricCriterion(BaseModel):
     observable_behavior: str
 
 
+class TrialTaskMaterial(BaseModel):
+    id: str
+    title: str
+    kind: Literal["feedback", "data", "capability", "constraint", "case"]
+    content: str
+    is_simulated: bool = True
+
+
 class TrialTaskDefinition(BaseModel):
     id: TaskId
     track: Literal["feature", "agent", "platform", "model"]
@@ -47,6 +55,7 @@ class TrialTaskDefinition(BaseModel):
     background: str
     goal: str
     constraints: list[str]
+    materials: list[TrialTaskMaterial] = Field(default_factory=list)
     steps: list[TrialTaskStep] = Field(min_length=5, max_length=5)
     event: TrialTaskEvent
     coach_prompts: list[str] = Field(min_length=3, max_length=3)
