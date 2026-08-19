@@ -1,9 +1,9 @@
 # 选择之前 API
 
-后端负责第一条真实链路：
+后端负责本机 Demo 的完整数据与大模型链路：
 
 ```text
-经历输入 → ProfileAgent → 阿里云百炼 Qwen → 结构化候选证据卡
+经历输入 → 能力卡确认 → 本地岗位 RAG → 固定任务库选题 → 五步试路 → Qwen 评价 → Observed Evidence
 ```
 
 后端使用 Conda 管理 Python 环境，当前提供 FastAPI API、Qwen 网关、ProfileAgent、CareerAgent 和本地岗位知识库检索。
@@ -112,20 +112,27 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 
 接口只返回候选证据卡，不会直接写入已确认画像。缺少 `DASHSCOPE_API_KEY`、网络不可用或 Qwen 输出无法通过结构化校验时，会返回明确错误，不生成伪造结果。
 
-## A-02 最小试路任务
+## 12 个固定试路任务与动态选题
 
-当前 Demo 只接入任务库中的 `A-02｜这个 Agent 为什么总是失败？`，不动态生成其他试路题。任务内容、8 个 Bad Case、归因层、事件和评价维度均来自 CoachAgent 任务库；指标与案例在任务库中明确标注为模拟试路材料。
+当前 Demo 接入 CoachAgent 任务库中的 12 个已校准任务，覆盖 Feature、Application / Agent、Platform / Developer、Model / Eval / Data 四类 AI 产品经理方向。任务材料、五步作答 Schema、中途事件、三级 Coach 提示、Rubric 权重和 L1–L5 行为锚点均来自 Demo 资料；模拟业务数据和案例在接口中明确标识。
+
+后端选择器根据已确认能力卡、待验证描述、目标岗位和已完成任务进行确定性排序。Qwen 不参与任务选择，不生成或改写题目。同样输入得到同样排序；存在未完成任务时会跳过已形成 Observed Evidence 的任务。
 
 试路接口：
 
-- `GET /api/v1/trial/tasks/A-02`：读取固定任务和前台材料。
-- `POST /api/v1/trial/sessions`：创建本机作答会话。
-- `GET /api/v1/trial/sessions/{session_id}`：恢复会话。
-- `PUT /api/v1/trial/sessions/{session_id}/answer`：保存结构化作答。
-- `POST /api/v1/trial/sessions/{session_id}/event`：触发中途事件。
-- `POST /api/v1/trial/sessions/{session_id}/submit`：提交给 Qwen 按任务 Rubric 评价，并生成 `Observed Evidence`。
+- `GET /api/v1/trial/catalog`：读取 12 个固定任务。
+- `GET /api/v1/trial/catalog/{task_id}`：读取单个任务的材料与作答结构。
+- `POST /api/v1/trial/recommendations`：使用已确认能力卡选择下一任务。
+- `POST /api/v1/trial/workbench/sessions`：创建本机作答会话。
+- `GET /api/v1/trial/workbench/sessions/{session_id}`：恢复会话。
+- `PUT /api/v1/trial/workbench/sessions/{session_id}/answer`：保存五步作答、材料查看/引用和修改次数。
+- `POST /api/v1/trial/workbench/sessions/{session_id}/coach`：使用并记录一级、二级或三级提示。
+- `POST /api/v1/trial/workbench/sessions/{session_id}/event`：触发中途事件。
+- `POST /api/v1/trial/workbench/sessions/{session_id}/submit`：由后端调用百炼 Qwen 评价并写回 `Observed Evidence`。
 
-单次任务只形成 `Observed Evidence`，不直接生成岗位胜任力等级或企业认证结论。
+Qwen 只评价固定任务中的可观察行为。接口返回各 Rubric 的分项任务分、主测能力的 `Observed Level`、证据依据、Coach 依赖和置信度，不计算单题总分，不把一次任务直接等同为 `Current Level`，也不输出岗位匹配百分比或企业认证结论。后端会丢弃模型自创的维度，并用任务库中的权重、主测能力和 L1–L5 锚点覆盖模型输出。
+
+原 `A-02` 专用接口仍保留用于兼容已有本机会话，新主流程统一使用 `/trial/workbench/` 接口。
 
 ## 本地岗位 RAG 与职业推演
 
@@ -143,7 +150,7 @@ Windows PowerShell 使用同一条命令。服务启动时也会检查文件指�
 
 职业推演接口：
 
-- `POST /api/v1/career/recommendations`：提交 1–4 个已确认能力卡 ID，返回 AI 产品经理路径摘要、支持性判断、未知项、A-02 下一步和本地引用片段。
+- `POST /api/v1/career/recommendations`：提交 1–4 个已确认能力卡 ID，返回 AI 产品经理路径摘要、支持性判断、未知项、动态选择的下一任务和本地引用片段。
 
 ## 本地画像持久化
 
