@@ -28,7 +28,7 @@ class ProfileAgent:
       "next_verification": "", "match_reason": "", "workplace_application": ""
     }
   ],
-  "next_question": ""
+  "next_question": "用陈述式补充提示，不使用问句"
 }
 最多输出 5 张卡。每张卡只表达一个主张。证据不足时降低为 hypothesis，并明确下一步验证。"""
 
@@ -119,9 +119,12 @@ class ProfileAgent:
 
         if not cards:
             raise ValueError("Qwen 未返回有效候选卡")
+        follow_up = str(raw.get("next_question") or "").strip()
+        if not follow_up or "？" in follow_up or "?" in follow_up:
+            follow_up = "补充本人在该经历中具体负责的环节。"
         return ProfileProposalResponse(
             trace_id=trace_id,
             experience=experience,
             card_proposals=cards,
-            next_question=str(raw.get("next_question") or "补充本人在该经历中具体负责的环节。")[:300],
+            next_question=follow_up[:300],
         )
