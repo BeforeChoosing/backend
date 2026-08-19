@@ -1,0 +1,72 @@
+from app.schemas.trial import (
+    A02CoachPrompt,
+    A02Metric,
+    A02RubricCriterion,
+    A02Task,
+)
+
+
+A02_TASK = A02Task(
+    id="A-02",
+    title="这个 Agent 为什么总是失败？",
+    subtitle="先用 Bad Case 做多假设归因，再决定优先修复什么；不要一看到失败就“调 Prompt”。",
+    role_type="Application / Agent PM｜求职 Agent",
+    work_stage="Stage 4 Bad Case 归因",
+    primary_skill="AI 产品化",
+    supporting_skills=["数据驱动", "模型评测", "方案与交互"],
+    estimated_minutes="15–20 min",
+    difficulty="D3 诊断与优先级",
+    role="你负责一款 AI 求职 Agent。用户上传简历、设置偏好，Agent 可检索职位、比较岗位、记忆偏好并生成申请计划。",
+    background="过去一周任务成功率下降，用户重试和人工覆盖增加。团队意见分歧：Prompt、模型、Memory、Tool 和 Workflow 都有人怀疑。你需要先把“现象”和“原因”分开。",
+    goal="对 Bad Case 做结构化归因，找出最值得优先验证的系统性问题。",
+    metrics=[
+        A02Metric(id="task_success_rate", label="Task Success Rate", current="61%", previous="73%"),
+        A02Metric(id="retry_rate", label="Retry Rate", current="28%", previous="17%"),
+        A02Metric(id="human_override_rate", label="Human Override Rate", current="34%", previous="22%"),
+        A02Metric(id="tool_failure_rate", label="Tool Failure Rate", current="7%", previous="6%"),
+    ],
+    bad_cases=[
+        {"id": "case-01", "title": "偏好遗忘", "description": "用户说“只考虑北京、上海”，后续推荐了深圳岗位。"},
+        {"id": "case-02", "title": "行业约束丢失", "description": "用户明确“不考虑游戏行业”，下一轮又推荐游戏公司。"},
+        {"id": "case-03", "title": "工具未调用", "description": "用户要求比较三个岗位，Agent 未调用岗位库，直接根据岗位名称推测。"},
+        {"id": "case-04", "title": "纠错未生效", "description": "用户纠正“我不是计算机专业”，五轮后 Agent 仍以计算机背景为前提。"},
+        {"id": "case-05", "title": "检索结果缺失", "description": "职位库中存在目标岗位，但检索返回为空；日志显示过滤条件过严。"},
+        {"id": "case-06", "title": "幻觉补全", "description": "岗位 JD 未写薪资，Agent 给出“月薪 25k–35k”的具体数字。"},
+        {"id": "case-07", "title": "交互误导", "description": "界面把“建议岗位”显示成“最适合你的岗位”，用户误以为系统已做确定判断。"},
+        {"id": "case-08", "title": "权限失败", "description": "简历附件读取失败，但 Agent 未告知用户，仍继续给出“基于你的简历”建议。"},
+    ],
+    attribution_layers=[
+        "Prompt / 指令层",
+        "Model / 基础模型能力",
+        "RAG / Retrieval",
+        "Tool / 权限与调用",
+        "Memory / 长期状态",
+        "Workflow / 任务编排",
+        "Interaction / UI 与用户控制",
+        "Safety / 事实与风险机制",
+        "暂无法判断",
+    ],
+    constraints=[
+        "本次先做归因与验证，不允许直接“换模型解决一切”。",
+        "修复资源只够优先推进 2 个问题。",
+        "必须说明“还不知道什么”，不能把假设写成事实。",
+    ],
+    event={
+        "actor": "Algorithm Engineer",
+        "message": "基础模型本周评测没有明显退化，而且本迭代周期不能更换模型。",
+        "instruction": "重新决策：你的 Top 2 和验证顺序是否变化？哪些问题更可能属于产品/工程层？",
+    },
+    coach_prompts=[
+        A02CoachPrompt(level="一级", title="方向", content="先只描述现象，不要急着写“因为 Prompt 不好”。"),
+        A02CoachPrompt(level="二级", title="框架", content="用“现象—可能原因—证据—验证动作—影响”分析，并允许一个 Case 有多个假设。"),
+        A02CoachPrompt(level="三级", title="半成品", content="示范 Case 03：现象=未检索直接回答；假设 A=Tool 调用策略，假设 B=工具权限；验证=查看调用日志/权限。用户完成其余。"),
+    ],
+    rubric=[
+        A02RubricCriterion(dimension="AI 产品化", weight=40, observable_behavior="能区分 Prompt/模型/数据/工具/记忆/流程/交互等层级，并设计验证。"),
+        A02RubricCriterion(dimension="数据驱动", weight=20, observable_behavior="结合频率、指标与影响面做优先级，而非按“看起来严重”排序。"),
+        A02RubricCriterion(dimension="模型评测", weight=15, observable_behavior="能把单个失败与模型能力证据分开，不轻率归因。"),
+        A02RubricCriterion(dimension="方案与交互", weight=15, observable_behavior="识别 UI 误导、错误恢复等非模型问题。"),
+        A02RubricCriterion(dimension="跨团队落地", weight=10, observable_behavior="验证动作可交给相应团队执行，并有清晰先后顺序。"),
+    ],
+    source_note="运行指标与 8 个案例均为模拟试路材料，用于复刻公开职责对应的真实判断。",
+)

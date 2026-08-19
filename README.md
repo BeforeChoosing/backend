@@ -110,6 +110,21 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 
 接口只返回候选证据卡，不会直接写入已确认画像。缺少 `DASHSCOPE_API_KEY`、网络不可用或 Qwen 输出无法通过结构化校验时，会返回明确错误，不生成伪造结果。
 
+## A-02 最小试路任务
+
+当前 Demo 只接入任务库中的 `A-02｜这个 Agent 为什么总是失败？`，不动态生成其他试路题。任务内容、8 个 Bad Case、归因层、事件和评价维度均来自 CoachAgent 任务库；指标与案例在任务库中明确标注为模拟试路材料。
+
+试路接口：
+
+- `GET /api/v1/trial/tasks/A-02`：读取固定任务和前台材料。
+- `POST /api/v1/trial/sessions`：创建本机作答会话。
+- `GET /api/v1/trial/sessions/{session_id}`：恢复会话。
+- `PUT /api/v1/trial/sessions/{session_id}/answer`：保存结构化作答。
+- `POST /api/v1/trial/sessions/{session_id}/event`：触发中途事件。
+- `POST /api/v1/trial/sessions/{session_id}/submit`：提交给 Qwen 按任务 Rubric 评价，并生成 `Observed Evidence`。
+
+单次任务只形成 `Observed Evidence`，不直接生成岗位胜任力等级或企业认证结论。
+
 ## 本地画像持久化
 
 用户点击“加入能力库”后，已确认卡片会写入本机 SQLite 文件。`PROFILE_DB_PATH` 用于指定文件位置，默认值为 `profile.db`；该文件已加入 Git 忽略规则，不会提交到仓库。

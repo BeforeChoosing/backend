@@ -11,6 +11,7 @@ from app.schemas.profile import (
     ProfileCardPatchRequest,
     ProfileCardsResponse,
 )
+from app.schemas.trial import ObservedEvidence
 
 
 class ProfileStore:
@@ -51,6 +52,14 @@ class ProfileStore:
                     reason TEXT NOT NULL,
                     trace_id TEXT,
                     snapshot_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS profile_evidence (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL UNIQUE,
+                    task_id TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
                 """
@@ -239,6 +248,43 @@ class ProfileStore:
                 connection,
                 reason="delete",
                 trace_id=trace_id,
+                cards=persisted_cards,
+                timestamp=timestamp,
+            )
+            return self._response(connection, persisted_cards)
+
+    def record_observed_evidence(
+        self,
+        session_id: str,
+        evidence: ObservedEvidence,
+    ) -> ProfileCardsResponse:
+        """Write task evidence into the same local profile version stream."""
+        timestamp = self._now()
+        with self._connection() as connection:
+            existing = connection.execute(
+                "SELECT 1 FROM profile_evidence WHERE session_id = ?", (session_id,)
+            ).fetchone()
+            if existing:
+                return self._response(connection)
+
+            connection.execute(
+                """
+                INSERT INTO profile_evidence (id, session_id, task_id, evidence_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    f"evidence-{session_id}",
+                    session_id,
+                    evidence.task_id,
+                    json.dumps(evidence.model_dump(mode="json"), ensure_ascii=False),
+                    timestamp.isoformat(),
+                ),
+            )
+            persisted_cards = self._cards_from_connection(connection)
+            self._record_version(
+                connection,
+                reason="trial_evidence",
+                trace_id=session_id,
                 cards=persisted_cards,
                 timestamp=timestamp,
             )
