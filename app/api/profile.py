@@ -1,12 +1,14 @@
 import logging
+from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.agents.profile_agent import ProfileAgent
 from app.config import get_settings
 from app.schemas.profile import (
     ConfirmProfileCardsRequest,
+    MaterialExtractResponse,
     ProfileCardPatchRequest,
     ProfileCardsResponse,
     ProfileOverviewResponse,
@@ -14,14 +16,37 @@ from app.schemas.profile import (
     ProfileProposalResponse,
 )
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
+from app.services.material_extractor import MaterialExtractionError, extract_material_text
 from app.services.profile_store import ProfileStore
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/profile", tags=["profile"])
+MAX_MATERIAL_BYTES = 20 * 1024 * 1024
 
 
 def _profile_store() -> ProfileStore:
     return ProfileStore(get_settings().profile_db_path)
+
+
+@router.post("/materials/extract", response_model=MaterialExtractResponse)
+async def extract_profile_material(file: UploadFile = File(...)) -> MaterialExtractResponse:
+    file_name = Path(file.filename or "upload").name
+    data = await file.read(MAX_MATERIAL_BYTES + 1)
+    await file.close()
+    if len(data) > MAX_MATERIAL_BYTES:
+        raise HTTPException(status_code=413, detail="材料文件不能超过 20MB。")
+    if not data:
+        raise HTTPException(status_code=422, detail="材料文件为空。")
+    try:
+        text, truncated = extract_material_text(file_name, data)
+    except MaterialExtractionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return MaterialExtractResponse(
+        file_name=file_name,
+        text=text,
+        char_count=len(text),
+        truncated=truncated,
+    )
 
 
 @router.get("/cards", response_model=ProfileCardsResponse)
@@ -47,7 +72,7 @@ def update_profile_card(
     try:
         return _profile_store().update_card(card_id, request)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="画像卡不存在。") from exc
+        raise HTTPException(status_code=404, detail="这张能力卡不存在。") from exc
 
 
 @router.delete("/cards/{card_id}", response_model=ProfileCardsResponse)
@@ -55,7 +80,7 @@ def delete_profile_card(card_id: str) -> ProfileCardsResponse:
     try:
         return _profile_store().delete_card(card_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="画像卡不存在。") from exc
+        raise HTTPException(status_code=404, detail="这张能力卡不存在。") from exc
 
 
 @router.post("/proposals", response_model=ProfileProposalResponse)

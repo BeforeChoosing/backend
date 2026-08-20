@@ -16,12 +16,19 @@ from app.services.llm_gateway import DashScopeQwenGateway
 class CareerAgent:
     """Explain one source-backed career path from confirmed profile cards."""
 
-    SYSTEM_PROMPT = """你是“选择之前”的 CareerAgent，只负责解释一个职业探索路径。
-只能依据用户已经确认的能力卡和给定的岗位知识片段回答，不能补写岗位事实、薪资、公司信息或录用结论。
-本次目标岗位固定为“AI 产品经理”。下一步任务已经由后端的确定性选择器从固定任务库选出；你只能解释这个选择，不能改写任务或推荐其他任务。
+    SYSTEM_PROMPT = """你是“选择之前”的职业方向助手。你的任务是帮用户看懂“为什么值得先试这个方向和这个小任务”，而不是替用户做职业决定。
+只能依据用户已经确认的能力卡和给定的岗位资料回答，不能补写岗位事实、薪资、公司信息或录用结论。
+本次目标岗位固定为“AI 产品经理”。下一步任务已经由程序从固定任务库选出；你只解释选择理由，不能改写任务或另选任务。
 每条支持性判断都要引用给定的 citation_id；不能引用不存在的 ID。
 如果材料不足，必须写入 unknowns，不能用常识补齐。
 不要输出匹配百分比、等级或“适合/不适合”的绝对结论。
+
+面向用户的文字要求：
+- 开门见山，用 2–3 句话说清“现在可以先试什么、为什么”。
+- 使用短句和常用词，避免“推演、能力矩阵、方法论、闭环、抓手、赋能、适配”等术语。
+- supported 写用户已经做过的事如何帮得上忙；unknowns 写还需要通过小任务观察什么。
+- 不重复字段名，不堆砌能力卡原文，不写宣传口号。
+
 只输出 JSON 对象，字段必须为：
 {
   "summary": "",
@@ -132,7 +139,7 @@ class CareerAgent:
         if not supports:
             supports.append(
                 CareerSupport(
-                    claim=f"已确认的“{cards[0].title}”可作为 AI 产品经理方向的待验证基础。",
+                    claim=f"你在“{cards[0].title}”中的经历，可以先带到 AI 产品经理的小任务里试一试。",
                     card_ids=[cards[0].id],
                     citation_ids=[retrieved[0].id],
                 )
@@ -143,7 +150,7 @@ class CareerAgent:
             confidence = "中"
         summary = str(
             raw.get("summary")
-            or f"当前材料支持进入 AI 产品经理试路，下一步通过 {next_task.id} 验证未知项。"
+            or f"现在可以先做 {next_task.id}，看看已有经历能否用在 AI 产品经理的真实问题中。"
         )[:500]
         unknowns = [
             str(item).strip()[:240]
@@ -153,7 +160,7 @@ class CareerAgent:
         return CareerRecommendation(
             summary=summary,
             supported=supports,
-            unknowns=unknowns or [f"尚未通过 {next_task.id} 验证{next_task.primary_skill}。"],
+            unknowns=unknowns or [f"还需要通过 {next_task.id} 看看你会怎样运用{next_task.primary_skill}。"],
             next_task_id=next_task.id,
             next_task_title=next_task.title,
             next_task_reason=next_task_reason,

@@ -112,6 +112,10 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 
 接口只返回候选证据卡，不会直接写入已确认画像。缺少 `DASHSCOPE_API_KEY`、网络不可用或 Qwen 输出无法通过结构化校验时，会返回明确错误，不生成伪造结果。
 
+## 上传材料提取
+
+`POST /api/v1/profile/materials/extract` 接收最大 20MB 的 PDF、Word (`.docx`)、Markdown 或 TXT 文档，只在内存中提取可复制文本，并把最多 12000 字返回前端供用户核对。扫描件 OCR、旧版 `.doc` 和外部链接抓取当前不在支持范围；接口不会把原文件或提取结果直接写入长期画像。
+
 ## 12 个固定试路任务与动态选题
 
 当前 Demo 接入 CoachAgent 任务库中的 12 个已校准任务，覆盖 Feature、Application / Agent、Platform / Developer、Model / Eval / Data 四类 AI 产品经理方向。任务材料、五步作答 Schema、中途事件、三级 Coach 提示、Rubric 权重和 L1–L5 行为锚点均来自 Demo 资料；模拟业务数据和案例在接口中明确标识。
