@@ -13,8 +13,16 @@ from app.services.llm_gateway import DashScopeQwenGateway
 class ProfileAgent:
     """Generate candidate evidence cards; it never confirms or persists them."""
 
-    SYSTEM_PROMPT = """你是“选择之前”的 ProfileAgent，只负责从用户授权提供的经历文字中提取候选证据。
-你不能把候选内容当作已确认能力，也不能补写用户没有说过的事实。
+    SYSTEM_PROMPT = """你是“选择之前”的经历整理助手。你的工作不是给用户贴标签，而是把用户亲自提供的经历整理得更清楚。
+只依据用户写下的内容：不能补写事实，不能把推测说成结论，也不能把候选内容当作用户已经确认的能力。
+
+面向用户的文字要求：
+- 使用自然、温和、具体的中文，像一位认真倾听的职业教练。
+- 优先写“在什么情况下，做了什么，带来什么结果”，少用抽象名词。
+- 避免“赋能、抓手、闭环、方法论、范式、拉通、推演、能力迁移”等行业套话，除非用户原文使用。
+- title 控制在 10–24 个汉字；description 用一句话说清实际行动；detail 说明依据和边界。
+- next_question 不是问句，而是一条简短、具体的补充建议，例如“补充你在这件事中亲自负责的部分。”
+
 严格只输出 JSON 对象，不要 Markdown，不要解释 JSON 以外的内容。
 输出格式：
 {
@@ -30,7 +38,7 @@ class ProfileAgent:
   ],
   "next_question": "用陈述式补充提示，不使用问句"
 }
-最多输出 5 张卡。每张卡只表达一个主张。证据不足时降低为 hypothesis，并明确下一步验证。"""
+最多输出 5 张卡。每张卡只表达一个主张。材料不足时降低为 hypothesis，并用普通用户能理解的话说明还缺什么。"""
 
     def __init__(self, gateway: DashScopeQwenGateway):
         self.gateway = gateway
@@ -47,11 +55,11 @@ class ProfileAgent:
     @staticmethod
     def _build_prompt(request: ProfileProposalRequest) -> str:
         target_role = request.target_role or "未指定目标岗位"
-        existing = "、".join(request.existing_card_titles) or "暂无已确认卡牌"
+        existing = "、".join(request.existing_card_titles) or "暂无已确认能力卡"
         return (
             f"目标岗位：{target_role}\n"
-            f"已有确认卡牌（仅用于避免重复，不代表本次证据）：{existing}\n"
-            "以下是用户授权的经历文字，请只依据这段文字分析：\n"
+            f"用户已经确认的能力卡（只用于避免重复）：{existing}\n"
+            "以下是用户主动提供的经历。先找行动和结果，再整理候选能力卡：\n"
             "--- BEGIN EXPERIENCE ---\n"
             f"{request.experience_text}\n"
             "--- END EXPERIENCE ---"
@@ -101,7 +109,7 @@ class ProfileAgent:
                     id=f"proposal-{trace_id[:8]}-{index + 1}",
                     title=title,
                     category=category,  # type: ignore[arg-type]
-                    description=str(item.get("description") or "从经历中提取的候选能力主张")[:240],
+                    description=str(item.get("description") or "根据这段经历整理出的待确认能力")[:240],
                     detail=str(item.get("detail") or evidence_quote)[:600],
                     icon=str(item.get("icon") or default_icon),
                     color_tone=color_tone,  # type: ignore[arg-type]
@@ -111,9 +119,9 @@ class ProfileAgent:
                     source_refs=[str(ref)[:120] for ref in (item.get("source_refs") or [])[:10]]
                     or ["input:experience_text"],
                     pending_verification=bool(item.get("pending_verification", True)),
-                    next_verification=str(item.get("next_verification") or "补充一个可观察的结果或下一步短任务")[:240],
-                    match_reason=str(item.get("match_reason") or f"依据：{evidence_quote}")[:300],
-                    workplace_application=str(item.get("workplace_application") or "需要在目标岗位任务中进一步验证")[:300],
+                    next_verification=str(item.get("next_verification") or "补充一个具体结果，或用一个小任务再试一次")[:240],
+                    match_reason=str(item.get("match_reason") or f"来自这段描述：{evidence_quote}")[:300],
+                    workplace_application=str(item.get("workplace_application") or "可以在一个相关岗位小任务中继续尝试")[:300],
                 )
             )
 

@@ -216,8 +216,8 @@ def _dynamic_observed_evidence(
             step.id for step in task.steps if session.answer.step_answers.get(step.id, "").strip()
         ],
         caveats=[
-            "本次任务只形成 Observed Evidence，不等同于岗位胜任力认证。",
-            "任务情境与业务数字均为模拟试路材料。",
+            "这次任务只记录本次表现，不代表长期能力或岗位认证。",
+            "任务情境和业务数字都是练习材料。",
         ],
         primary_ability=evaluation.primary_ability,
         observed_level=evaluation.observed_level,
@@ -284,8 +284,8 @@ def _observed_evidence(session: TrialSession) -> ObservedEvidence:
         ],
         evidence_refs=[item.source_id for item in answer.evidence],
         caveats=[
-            "本次任务只形成 Observed Evidence，不等同于岗位胜任力认证。",
-            "运行指标和案例均为模拟试路材料。",
+            "这次任务只记录本次表现，不代表长期能力或岗位认证。",
+            "运行指标和案例都是练习材料。",
         ],
     )
 

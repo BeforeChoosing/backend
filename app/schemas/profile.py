@@ -24,6 +24,14 @@ class ProfileProposalRequest(BaseModel):
     existing_card_titles: list[str] = Field(default_factory=list, max_length=20)
 
 
+class MaterialExtractResponse(BaseModel):
+    file_name: str
+    text: str = Field(min_length=1, max_length=12000)
+    char_count: int = Field(ge=1)
+    truncated: bool = False
+    notice: str = "仅提取文档中的可复制文本；内容需由用户核对，且尚未写入长期画像。"
+
+
 class ExperienceSummary(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     actions: list[str] = Field(default_factory=list, max_length=8)

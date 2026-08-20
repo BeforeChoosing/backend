@@ -37,7 +37,7 @@ async def create_career_recommendation(
     selected_ids = list(dict.fromkeys(request.selected_card_ids))
     cards = _profile_store().get_cards_by_ids(selected_ids)
     if len(cards) != len(selected_ids):
-        raise HTTPException(status_code=422, detail="只能使用已确认的能力卡进行职业推演。")
+        raise HTTPException(status_code=422, detail="请先选择你已经确认过的能力卡。")
 
     query = "AI 产品经理 " + " ".join(
         f"{card.title} {card.category} {card.description} {card.detail}" for card in cards
@@ -50,7 +50,7 @@ async def create_career_recommendation(
             limit=5,
         )
         if not retrieved:
-            raise HTTPException(status_code=503, detail="岗位知识库暂时没有返回可引用片段。")
+            raise HTTPException(status_code=503, detail="暂时没有找到可参考的岗位资料。")
         task_recommendation = recommend_trial_task(
             cards,
             _profile_store().get_completed_task_ids(),
@@ -67,10 +67,10 @@ async def create_career_recommendation(
         raise
     except FileNotFoundError as exc:
         logger.exception("career knowledge corpus unavailable")
-        raise HTTPException(status_code=503, detail="岗位知识库未准备完成，请先构建本地索引。") from exc
+        raise HTTPException(status_code=503, detail="岗位资料还没有准备好，请先建立本地索引。") from exc
     except LLMGatewayError as exc:
         logger.warning("career recommendation failed reason=%s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except (ValueError, TypeError) as exc:
         logger.warning("career recommendation invalid reason=%s", exc)
-        raise HTTPException(status_code=502, detail="职业推荐未通过结构化校验，请稍后重试。") from exc
+        raise HTTPException(status_code=502, detail="这次建议没有整理成功，请稍后再试。") from exc
