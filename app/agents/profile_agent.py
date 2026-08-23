@@ -63,7 +63,7 @@ class ProfileAgent:
         raw = await asyncio.to_thread(
             self.gateway.generate_json, self.SYSTEM_PROMPT, user_prompt
         )
-        return self._normalize(raw, trace_id)
+        return self._normalize(raw, trace_id, request.experience_text)
 
     @staticmethod
     def _build_prompt(request: ProfileProposalRequest) -> str:
@@ -80,7 +80,11 @@ class ProfileAgent:
         )
 
     @staticmethod
-    def _normalize(raw: dict[str, Any], trace_id: str) -> ProfileProposalResponse:
+    def _normalize(
+        raw: dict[str, Any],
+        trace_id: str,
+        experience_text: str,
+    ) -> ProfileProposalResponse:
         experience_raw = raw.get("experience") or {}
         experience = ExperienceSummary(
             title=str(experience_raw.get("title") or "未命名经历")[:120],
@@ -118,6 +122,10 @@ class ProfileAgent:
             evidence_type = str(item.get("evidence_type") or "self_report")
             if evidence_type not in allowed_evidence_types:
                 evidence_type = "self_report"
+            if evidence_quote not in experience_text:
+                evidence_quote = "模型未返回可逐字核对的原文片段"
+                claim_level = "hypothesis"
+                evidence_type = "inference"
             cards.append(
                 CardProposal(
                     id=f"proposal-{trace_id[:8]}-{index + 1}",

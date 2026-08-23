@@ -3,10 +3,21 @@
 后端负责本机 Demo 的完整数据与大模型链路：
 
 ```text
-经历输入 → 能力卡确认 → 本地岗位 RAG → 固定任务库选题 → 五步试路 → Qwen 评价 → Observed Evidence
+经历输入 → 能力卡确认 → 本地岗位 RAG → 固定任务库选题 → 五步试路 → Qwen 评价 → 成长复盘 → Observed Evidence
 ```
 
-后端使用 Conda 管理 Python 环境，当前提供 FastAPI API、Qwen 网关、ProfileAgent、CareerAgent 和本地岗位知识库检索。
+后端使用 Conda 管理 Python 环境，当前提供 FastAPI API、Qwen 网关、四个独立 Agent 和本地岗位知识库检索。
+
+四个 Agent 的职责和写入边界如下：
+
+| Agent | 职责 | 边界 |
+|---|---|---|
+| `ProfileAgent` | 从用户经历中整理候选能力卡 | 不确认卡片，不写入长期画像 |
+| `CareerAgent` | 结合已确认能力卡和岗位 RAG 解释下一方向 | 不选择或改写任务，不补写岗位事实 |
+| `TrialAgent` | 按固定 Rubric 和 L1–L5 锚点评价单次任务 | 不形成长期能力等级或岗位认证 |
+| `ReflectionAgent` | 将任务评价整理成证据变更提案 | 不修改评价分数，不直接更新已确认能力卡 |
+
+四个 Agent 可以共用同一个百炼 Qwen 模型，但各自拥有独立执行类、提示词版本、输入输出契约和校验规则。任务提交时先由 `TrialAgent` 评价，再由 `ReflectionAgent` 生成新增、加强、冲突或仍待验证的证据提案。复盘调用失败时，后端保留已经完成的任务评价，并写入明确标注为 `deterministic_fallback` 的保守复盘结果。
 
 当前版本仅用于 macOS、Linux 或 Windows 电脑上的本机运行，不涉及服务器部署。后端默认监听 `127.0.0.1:8000`。
 
@@ -132,9 +143,9 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 - `PUT /api/v1/trial/workbench/sessions/{session_id}/answer`：保存五步作答、材料查看/引用和修改次数。
 - `POST /api/v1/trial/workbench/sessions/{session_id}/coach`：使用并记录一级、二级或三级提示。
 - `POST /api/v1/trial/workbench/sessions/{session_id}/event`：触发中途事件。
-- `POST /api/v1/trial/workbench/sessions/{session_id}/submit`：由后端调用百炼 Qwen 评价并写回 `Observed Evidence`。
+- `POST /api/v1/trial/workbench/sessions/{session_id}/submit`：由后端依次调用 `TrialAgent` 和 `ReflectionAgent`，写回任务评价、复盘提案与 `Observed Evidence`。
 
-Qwen 只评价固定任务中的可观察行为。接口返回各 Rubric 的分项任务分、主测能力的 `Observed Level`、证据依据、Coach 依赖和置信度，不计算单题总分，不把一次任务直接等同为 `Current Level`，也不输出岗位匹配百分比或企业认证结论。后端会丢弃模型自创的维度，并用任务库中的权重、主测能力和 L1–L5 锚点覆盖模型输出。
+Qwen 只评价固定任务中的可观察行为。接口返回各 Rubric 的分项任务分、主测能力的 `Observed Level`、证据依据、Coach 依赖和置信度，不计算单题总分，不把一次任务直接等同为 `Current Level`，也不输出岗位匹配百分比或企业认证结论。后端会丢弃模型自创的维度，并用任务库中的权重、主测能力和 L1–L5 锚点覆盖模型输出。复盘提案中的能力名和证据引用同样经过白名单校验，不能引用模型自创的来源。
 
 原 `A-02` 专用接口仍保留用于兼容已有本机会话，新主流程统一使用 `/trial/workbench/` 接口。
 

@@ -81,8 +81,21 @@ class ReflectionAgent:
                 "primary_ability": task.primary_skill,
                 "supporting_abilities": task.supporting_skills[:2],
             },
-            "answer": answer.model_dump(mode="json"),
-            "evaluation": evaluation.model_dump(mode="json"),
+            "trial_evaluation": {
+                "summary": evaluation.summary,
+                "primary_ability": evaluation.primary_ability,
+                "observed_level": evaluation.observed_level,
+                "level_reason": evaluation.level_reason,
+                "supporting_evidence": [
+                    item.model_dump(mode="json")
+                    for item in evaluation.supporting_evidence
+                ],
+                "coach_dependency": evaluation.coach_dependency,
+                "strengths": evaluation.strengths,
+                "gaps": evaluation.gaps,
+                "next_step": evaluation.next_step,
+                "confidence": evaluation.confidence,
+            },
             "confirmed_cards": [
                 {
                     "id": card.id,
@@ -96,11 +109,12 @@ class ReflectionAgent:
                 {
                     "session_id": record.session_id,
                     "task_id": record.task_id,
-                    "observed_evidence": record.observed_evidence.model_dump(mode="json"),
-                    "evaluation": (
-                        record.evaluation.model_dump(mode="json")
-                        if record.evaluation
-                        else None
+                    "statement": record.observed_evidence.statement,
+                    "primary_ability": record.observed_evidence.primary_ability,
+                    "observed_level": record.observed_evidence.observed_level,
+                    "confidence": record.observed_evidence.confidence,
+                    "evaluation_summary": (
+                        record.evaluation.summary if record.evaluation else None
                     ),
                 }
                 for record in previous_evidence[:8]

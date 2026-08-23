@@ -9,6 +9,7 @@ from app.schemas.trial import (
     TrialEvaluation,
 )
 from app.services.dynamic_trial_store import DynamicTrialStore
+from app.services.llm_gateway import LLMGatewayError
 from app.services.profile_store import ProfileStore
 from app.services.trial_store import TrialStore
 
@@ -69,6 +70,11 @@ class FakeReflectionAgent:
             ],
             next_verification=evaluation.next_step,
         )
+
+
+class FailingReflectionAgent:
+    async def reflect(self, task, answer, evaluation, cards, previous_evidence):
+        raise LLMGatewayError("测试中的复盘模型故障")
 
 
 def _complete_answer() -> dict:
@@ -145,7 +151,7 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
     monkeypatch.setattr(trial_api, "_dynamic_trial_store", lambda: dynamic_store)
     monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
     monkeypatch.setattr(trial_api, "_trial_agent", lambda: FakeTrialAgent())
-    monkeypatch.setattr(trial_api, "_reflection_agent", lambda: FakeReflectionAgent())
+    monkeypatch.setattr(trial_api, "_reflection_agent", lambda: FailingReflectionAgent())
     client = TestClient(app)
 
     task = client.get("/api/v1/trial/catalog/F-01")
@@ -194,5 +200,6 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
     assert evidence["observed_level"] == "L3"
     assert evidence["primary_ability"] == "用户洞察"
     assert evidence["coach_dependency"] == "方向性提示"
-    assert evidence["reflection"]["generation_mode"] == "model"
+    assert evidence["reflection"]["generation_mode"] == "deterministic_fallback"
+    assert evidence["reflection"]["changes"][0]["change_type"] == "仍待验证"
     assert profile_store.get_completed_task_ids() == ["F-01"]

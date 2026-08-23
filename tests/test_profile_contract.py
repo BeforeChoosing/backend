@@ -41,3 +41,24 @@ def test_profile_agent_returns_pending_cards():
     assert response.card_proposals[0].title == "用户研究"
     assert response.card_proposals[0].pending_verification is True
     assert response.card_proposals[0].source_refs == ["input:experience_text"]
+
+
+class InventedQuoteGateway(FakeGateway):
+    def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
+        payload = super().generate_json(system_prompt, user_prompt)
+        payload["card_proposals"][0]["claim_level"] = "fact"
+        payload["card_proposals"][0]["evidence_type"] = "documented_fact"
+        payload["card_proposals"][0]["evidence_quote"] = "获得全国一等奖"
+        return payload
+
+
+def test_profile_agent_downgrades_unverifiable_quote():
+    response = asyncio.run(ProfileAgent(InventedQuoteGateway()).propose(
+        ProfileProposalRequest(experience_text="我在校园项目中访谈用户并调整了方案，最后完成了可用原型。"),
+        "trace-test-invalid-quote",
+    ))
+
+    card = response.card_proposals[0]
+    assert card.claim_level == "hypothesis"
+    assert card.evidence_type == "inference"
+    assert card.evidence_quote == "模型未返回可逐字核对的原文片段"
