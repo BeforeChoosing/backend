@@ -31,6 +31,7 @@ def test_reflection_filters_invented_references_and_abilities() -> None:
     references = [
         {"reference_id": "answer:scope", "content": "收缩首版范围"},
         {"reference_id": "evaluation:level", "content": "L3"},
+        {"reference_id": "card_play:hypothesis", "content": "任务前假设"},
     ]
     raw = {
         "summary": "本次形成了新的任务证据。",
@@ -45,9 +46,9 @@ def test_reflection_filters_invented_references_and_abilities() -> None:
             {
                 "change_type": "加强证据",
                 "ability": task.primary_skill,
-                "statement": "没有有效引用的内容不应保留。",
-                "evidence_refs": ["invented:ref"],
-                "basis": "无有效依据。",
+                "statement": "任务前假设不能单独成为能力证据。",
+                "evidence_refs": ["card_play:hypothesis"],
+                "basis": "只有任务前预期。",
             },
         ],
         "next_verification": "换一个任务继续验证。",

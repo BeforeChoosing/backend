@@ -131,6 +131,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 
 当前 Demo 接入 CoachAgent 任务库中的 12 个已校准任务，覆盖 Feature、Application / Agent、Platform / Developer、Model / Eval / Data 四类 AI 产品经理方向。任务材料、五步作答 Schema、中途事件、三级 Coach 提示、Rubric 权重和 L1–L5 行为锚点均来自 Demo 资料；模拟业务数据和案例在接口中明确标识。
 
+进入 03 模块后分为两个阶段：第一阶段从已确认能力卡中选择 1–4 张，记录准备如何使用这些能力和本次待验证假设；第二阶段进入现有五步真实任务工作台。能力出牌是任务前预期，不直接计入分数或能力等级。`TrialAgent` 只评价真实任务中的可观察行为，`ReflectionAgent` 再对比预期与实际证据。
+
 后端选择器根据已确认能力卡、待验证描述、目标岗位、最近评价中的主测能力/等级/置信度/下一步建议和已完成任务进行确定性排序。Qwen 不参与任务选择，不生成或改写题目。同样输入得到同样排序；存在未完成任务时会跳过已形成 Observed Evidence 的任务。
 
 试路接口：

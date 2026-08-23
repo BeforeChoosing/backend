@@ -66,11 +66,12 @@ class ReflectionAgent:
         cards: list[ProfileCard],
         previous_evidence: list[ProfileEvidenceRecord],
     ) -> ReflectionProposal:
+        relevant_cards = self._relevant_cards(answer, cards)
         reference_catalog = self._reference_catalog(
             task,
             answer,
             evaluation,
-            cards,
+            relevant_cards,
             previous_evidence,
         )
         payload = {
@@ -103,7 +104,7 @@ class ReflectionAgent:
                     "category": card.category,
                     "description": card.description,
                 }
-                for card in cards
+                for card in relevant_cards
             ],
             "previous_evidence": [
                 {
@@ -127,6 +128,16 @@ class ReflectionAgent:
             json.dumps(payload, ensure_ascii=False),
         )
         return self._normalize(raw, task, evaluation, reference_catalog)
+
+    @staticmethod
+    def _relevant_cards(
+        answer: A02Answer | DynamicTrialAnswer,
+        cards: list[ProfileCard],
+    ) -> list[ProfileCard]:
+        if not isinstance(answer, DynamicTrialAnswer):
+            return cards
+        selected_ids = set(answer.selected_card_ids)
+        return [card for card in cards if card.id in selected_ids]
 
     @staticmethod
     def _reference_catalog(
@@ -248,6 +259,11 @@ class ReflectionAgent:
                 if str(reference_id) in allowed_refs
             ][:8]
             if not refs:
+                continue
+            if not any(
+                reference_id.startswith(("answer:", "evaluation:", "prior:"))
+                for reference_id in refs
+            ):
                 continue
             change_type = str(item.get("change_type") or "仍待验证")
             if change_type not in allowed_types:
