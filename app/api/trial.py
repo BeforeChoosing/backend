@@ -117,6 +117,8 @@ def save_dynamic_trial_answer(
     request: DynamicTrialAnswerUpdateRequest,
 ) -> DynamicTrialSession:
     try:
+        if request.answer.card_play_completed:
+            _validate_card_play(request.answer, _profile_store())
         return _dynamic_trial_store().save_answer(session_id, request.answer)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="试路会话不存在。") from exc
@@ -137,13 +139,14 @@ async def submit_dynamic_trial_session(session_id: str) -> DynamicTrialSession:
     session = _get_dynamic_session(session_id)
     if session.status == "submitted":
         return session
+    profile_store = _profile_store()
+    _validate_card_play(session.answer, profile_store)
     _validate_dynamic_answer(
         session.task_id,
         session.answer,
         event_revealed=session.event_revealed,
     )
     task = get_task_definition(session.task_id)
-    profile_store = _profile_store()
     try:
         evaluation = await _trial_agent().evaluate_dynamic(task, session.answer)
         reflection = await _create_reflection(
@@ -218,6 +221,23 @@ def _validate_dynamic_answer(task_id: str, answer: DynamicTrialAnswer, *, event_
         raise HTTPException(status_code=422, detail="请先接收中途事件并完成重新决策。")
     if answer.event_decision is None or not answer.event_response.strip():
         raise HTTPException(status_code=422, detail="请填写中途事件后的维持或调整决定及依据。")
+
+
+def _validate_card_play(
+    answer: DynamicTrialAnswer,
+    profile_store: ProfileStore,
+) -> None:
+    selected_ids = list(dict.fromkeys(answer.selected_card_ids))
+    if not answer.card_play_completed:
+        raise HTTPException(status_code=422, detail="请先完成能力出牌阶段。")
+    if not 1 <= len(selected_ids) <= 4 or len(selected_ids) != len(answer.selected_card_ids):
+        raise HTTPException(status_code=422, detail="能力出牌需要选择 1–4 张不同的已确认能力卡。")
+    if not answer.card_play_rationale.strip():
+        raise HTTPException(status_code=422, detail="请说明准备如何在任务中使用这些能力。")
+    if not answer.validation_hypothesis.strip():
+        raise HTTPException(status_code=422, detail="请填写本次任务准备验证的假设。")
+    if len(profile_store.get_cards_by_ids(selected_ids)) != len(selected_ids):
+        raise HTTPException(status_code=422, detail="能力出牌只能使用已确认的能力卡。")
 
 
 def _dynamic_observed_evidence(

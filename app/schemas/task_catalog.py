@@ -86,6 +86,10 @@ class TrialTaskRecommendation(BaseModel):
 
 
 class DynamicTrialAnswer(BaseModel):
+    selected_card_ids: list[str] = Field(default_factory=list, max_length=4)
+    card_play_rationale: str = Field(default="", max_length=1200)
+    validation_hypothesis: str = Field(default="", max_length=600)
+    card_play_completed: bool = False
     step_answers: dict[str, str] = Field(default_factory=dict)
     viewed_material_ids: list[str] = Field(default_factory=list, max_length=30)
     evidence_refs: list[str] = Field(default_factory=list, max_length=12)

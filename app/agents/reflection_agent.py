@@ -138,6 +138,20 @@ class ReflectionAgent:
     ) -> list[dict[str, str]]:
         references: list[dict[str, str]] = []
         if isinstance(answer, DynamicTrialAnswer):
+            if answer.card_play_rationale.strip():
+                references.append(
+                    {
+                        "reference_id": "card_play:rationale",
+                        "content": answer.card_play_rationale[:1200],
+                    }
+                )
+            if answer.validation_hypothesis.strip():
+                references.append(
+                    {
+                        "reference_id": "card_play:hypothesis",
+                        "content": answer.validation_hypothesis[:600],
+                    }
+                )
             for step_id, content in answer.step_answers.items():
                 if content.strip():
                     references.append(

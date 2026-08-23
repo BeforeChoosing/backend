@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.api import trial as trial_api
 from app.main import app
+from app.schemas.profile import CardProposal
 from app.schemas.trial import (
     ReflectionChange,
     ReflectionProposal,
@@ -98,6 +99,23 @@ def _complete_answer() -> dict:
     }
 
 
+def _confirm_trial_card(profile_store: ProfileStore) -> None:
+    profile_store.confirm_cards([
+        CardProposal(
+            id="trial-card-1",
+            title="拆解并验证产品方案",
+            category="产品策略",
+            description="根据约束缩小范围并设计验证动作",
+            detail="来自用户已经确认的项目经历。",
+            evidence_quote="根据约束缩小范围并设计验证动作",
+            source_refs=["input:experience_text"],
+            next_verification="在试路任务中继续验证",
+            match_reason="与任务中的方案取舍相关",
+            workplace_application="支持 AI 产品范围设计",
+        )
+    ])
+
+
 def test_trial_api_requires_event_and_returns_observed_evidence(tmp_path, monkeypatch):
     trial_store = TrialStore(tmp_path / "trial.db")
     profile_store = ProfileStore(tmp_path / "profile.db")
@@ -148,6 +166,7 @@ def test_trial_api_requires_event_and_returns_observed_evidence(tmp_path, monkey
 def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch):
     dynamic_store = DynamicTrialStore(tmp_path / "dynamic.db")
     profile_store = ProfileStore(tmp_path / "profile.db")
+    _confirm_trial_card(profile_store)
     monkeypatch.setattr(trial_api, "_dynamic_trial_store", lambda: dynamic_store)
     monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
     monkeypatch.setattr(trial_api, "_trial_agent", lambda: FakeTrialAgent())
@@ -174,6 +193,10 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
         f"/api/v1/trial/workbench/sessions/{session_id}/answer",
         json={
             "answer": {
+                "selected_card_ids": ["trial-card-1"],
+                "card_play_rationale": "用方案拆解能力划分首版范围。",
+                "validation_hypothesis": "验证能否根据事件约束调整方案。",
+                "card_play_completed": True,
                 "step_answers": {
                     "problem": "优先解决素材整理阻塞。",
                     "evidence": "引用反馈与创作漏斗。",
@@ -203,3 +226,31 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
     assert evidence["reflection"]["generation_mode"] == "deterministic_fallback"
     assert evidence["reflection"]["changes"][0]["change_type"] == "仍待验证"
     assert profile_store.get_completed_task_ids() == ["F-01"]
+
+
+def test_dynamic_workbench_rejects_unconfirmed_card_play(tmp_path, monkeypatch):
+    dynamic_store = DynamicTrialStore(tmp_path / "dynamic.db")
+    profile_store = ProfileStore(tmp_path / "profile.db")
+    monkeypatch.setattr(trial_api, "_dynamic_trial_store", lambda: dynamic_store)
+    monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
+    client = TestClient(app)
+
+    created = client.post(
+        "/api/v1/trial/workbench/sessions",
+        json={"task_id": "F-01"},
+    )
+    session_id = created.json()["id"]
+    saved = client.put(
+        f"/api/v1/trial/workbench/sessions/{session_id}/answer",
+        json={
+            "answer": {
+                "selected_card_ids": ["not-confirmed"],
+                "card_play_rationale": "准备使用这张卡完成任务。",
+                "validation_hypothesis": "验证能否完成任务中的关键判断。",
+                "card_play_completed": True,
+            }
+        },
+    )
+
+    assert saved.status_code == 422
+    assert saved.json()["detail"] == "能力出牌只能使用已确认的能力卡。"
