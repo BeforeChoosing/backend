@@ -3,7 +3,7 @@
 后端负责本机 Demo 的完整数据与大模型链路：
 
 ```text
-经历输入 → 能力卡确认 → 本地岗位 RAG → 固定任务库选题 → 五步试路 → Qwen 评价 → 成长复盘 → Observed Evidence
+经历输入 → 能力卡确认 → 本地岗位 RAG → 固定任务库选题 → 三轮能力应用推演 → 五步试路 → Qwen 评价 → 成长复盘 → Observed Evidence
 ```
 
 后端使用 Conda 管理 Python 环境，当前提供 FastAPI API、Qwen 网关、四个独立 Agent 和本地岗位知识库检索。
@@ -173,7 +173,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 
 当前 Demo 接入 CoachAgent 任务库中的 12 个已校准任务，覆盖 Feature、Application / Agent、Platform / Developer、Model / Eval / Data 四类 AI 产品经理方向。任务材料、五步作答 Schema、中途事件、三级 Coach 提示、Rubric 权重和 L1–L5 行为锚点均来自 Demo 资料；模拟业务数据和案例在接口中明确标识。
 
-进入 03 模块后分为两个阶段：第一阶段从已确认能力卡中选择 1–4 张，记录准备如何使用这些能力和本次待验证假设；第二阶段进入现有五步真实任务工作台。能力出牌是任务前预期，不直接计入分数或能力等级。`TrialAgent` 只评价真实任务中的可观察行为，`ReflectionAgent` 再对比预期与实际证据。
+进入 03 模块后分为两个阶段。第一阶段包含三轮能力应用推演，每轮从完整的已确认能力卡库中选择 1–3 张卡牌。后端使用固定任务 Rubric 的前三项评价维度作为答案依据，并根据能力卡类别返回高度适用、部分适用或关联较弱的结果；该过程不调用 Qwen。第二阶段进入现有五步真实任务工作台。能力出牌是任务前判断，不直接计入分数或能力等级。`TrialAgent` 只评价真实任务中的可观察行为，`ReflectionAgent` 再对比预期与实际证据。
 
 后端选择器根据已确认能力卡、待验证描述、目标岗位、最近评价中的主测能力/等级/置信度/下一步建议和已完成任务进行确定性排序。Qwen 不参与任务选择，不生成或改写题目。同样输入得到同样排序；存在未完成任务时会跳过已形成 Observed Evidence 的任务。
 
@@ -184,7 +184,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 - `POST /api/v1/trial/recommendations`：使用已确认能力卡选择下一任务。
 - `POST /api/v1/trial/workbench/sessions`：创建本机作答会话。
 - `GET /api/v1/trial/workbench/sessions/{session_id}`：恢复会话。
-- `PUT /api/v1/trial/workbench/sessions/{session_id}/answer`：保存五步作答、材料查看/引用和修改次数。
+- `PUT /api/v1/trial/workbench/sessions/{session_id}/answer`：保存三轮能力选择与匹配反馈，以及五步作答、材料查看/引用和修改次数。
 - `POST /api/v1/trial/workbench/sessions/{session_id}/coach`：使用并记录一级、二级或三级提示。
 - `POST /api/v1/trial/workbench/sessions/{session_id}/event`：触发中途事件。
 - `POST /api/v1/trial/workbench/sessions/{session_id}/submit`：由后端依次调用 `TrialAgent` 和 `ReflectionAgent`，写回任务评价、复盘提案与 `Observed Evidence`。
