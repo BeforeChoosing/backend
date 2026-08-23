@@ -110,6 +110,48 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/health
 }
 ```
 
+## 一键验收
+
+先启动前端和后端，再在后端仓库根目录执行验收脚本。默认检查环境变量、百炼地址、本地 RAG、12 个固定任务、四个 Agent，以及前后端连通性；默认不会调用 Qwen，不产生模型费用。
+
+macOS/Linux：
+
+```bash
+conda activate before-choosing-demo
+python scripts/check_demo.py
+```
+
+Windows PowerShell：
+
+```powershell
+conda activate before-choosing-demo
+python .\scripts\check_demo.py
+```
+
+前后端尚未启动时，可以只检查静态配置和本地数据：
+
+```bash
+python scripts/check_demo.py --skip-services
+```
+
+Windows PowerShell：
+
+```powershell
+python .\scripts\check_demo.py --skip-services
+```
+
+需要确认百炼真实连通性时，显式增加 `--live-qwen`。该参数只执行 1 次有意义的 Qwen JSON 调用，会产生少量费用：
+
+```bash
+python scripts/check_demo.py --live-qwen
+```
+
+Windows PowerShell：
+
+```powershell
+python .\scripts\check_demo.py --live-qwen
+```
+
 ## 调用候选卡接口
 
 ```bash
@@ -148,6 +190,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 - `POST /api/v1/trial/workbench/sessions/{session_id}/submit`：由后端依次调用 `TrialAgent` 和 `ReflectionAgent`，写回任务评价、复盘提案与 `Observed Evidence`。
 
 Qwen 只评价固定任务中的可观察行为。接口返回各 Rubric 的分项任务分、主测能力的 `Observed Level`、证据依据、Coach 依赖和置信度，不计算单题总分，不把一次任务直接等同为 `Current Level`，也不输出岗位匹配百分比或企业认证结论。后端会丢弃模型自创的维度，并用任务库中的权重、主测能力和 L1–L5 锚点覆盖模型输出。复盘提案中的能力名和证据引用同样经过白名单校验，不能引用模型自创的来源。
+
+相同能力卡、岗位资料和任务选择结果会复用已经通过结构化校验的职业推荐；相同任务定义、作答和提示词版本会复用已经通过校验的任务评价。缓存保存在本机 `PROFILE_DB_PATH` 指定的 SQLite 文件中。单个会话的并发提交会串行处理，已提交会话直接返回原评价。Coach 提示只在用户主动点击时记录，不进入自动缓存调用。
 
 原 `A-02` 专用接口仍保留用于兼容已有本机会话，新主流程统一使用 `/trial/workbench/` 接口。
 
