@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -12,6 +13,7 @@ from app.schemas.trial import (
     ObservedEvidence,
     ReflectionProposal,
     TrialAnswerUpdateRequest,
+    TrialEvaluation,
     TrialSession,
     TrialSessionCreateRequest,
 )
@@ -29,6 +31,7 @@ from app.schemas.task_catalog import (
 )
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
 from app.services.dynamic_trial_store import DynamicTrialStore
+from app.services.model_response_cache import ModelResponseCache
 from app.services.profile_store import ProfileStore
 from app.services.trial_store import TrialStore
 from app.services.task_selector import recommend_trial_task
@@ -37,6 +40,9 @@ from app.tasks.catalog import get_task_definition, list_task_definitions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/trial", tags=["trial"])
+_dynamic_submission_locks: dict[str, asyncio.Lock] = {}
+_legacy_submission_locks: dict[str, asyncio.Lock] = {}
+_model_call_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
 
 def _trial_store() -> TrialStore:
@@ -57,6 +63,19 @@ def _profile_store() -> ProfileStore:
 
 def _dynamic_trial_store() -> DynamicTrialStore:
     return DynamicTrialStore(get_settings().profile_db_path)
+
+
+def _model_cache() -> ModelResponseCache:
+    return ModelResponseCache(_profile_store().db_path)
+
+
+def _dynamic_answer_cache_payload(answer: DynamicTrialAnswer) -> dict:
+    payload = answer.model_dump(mode="json")
+    payload["coach_usage"] = [
+        {"level": usage.level, "prompt": usage.prompt}
+        for usage in answer.coach_usage
+    ]
+    return payload
 
 
 def _get_task(task_id: str) -> A02Task:
@@ -136,39 +155,72 @@ def reveal_dynamic_trial_event(session_id: str) -> DynamicTrialSession:
 
 @router.post("/workbench/sessions/{session_id}/submit", response_model=DynamicTrialSession)
 async def submit_dynamic_trial_session(session_id: str) -> DynamicTrialSession:
-    session = _get_dynamic_session(session_id)
-    if session.status == "submitted":
-        return session
-    profile_store = _profile_store()
-    _validate_card_play(session.answer, profile_store)
-    _validate_dynamic_answer(
-        session.task_id,
-        session.answer,
-        event_revealed=session.event_revealed,
-    )
-    task = get_task_definition(session.task_id)
-    try:
-        evaluation = await _trial_agent().evaluate_dynamic(task, session.answer)
-        reflection = await _create_reflection(
-            task,
+    lock = _dynamic_submission_locks.setdefault(session_id, asyncio.Lock())
+    async with lock:
+        session = _get_dynamic_session(session_id)
+        if session.status == "submitted":
+            return session
+        profile_store = _profile_store()
+        _validate_card_play(session.answer, profile_store)
+        _validate_dynamic_answer(
+            session.task_id,
             session.answer,
-            evaluation,
-            profile_store,
+            event_revealed=session.event_revealed,
         )
-        observed_evidence = _dynamic_observed_evidence(
-            session,
-            evaluation,
-            reflection,
+        task = get_task_definition(session.task_id)
+        try:
+            evaluation = await _evaluate_dynamic_cached(task, session.answer)
+            reflection = await _create_reflection(
+                task,
+                session.answer,
+                evaluation,
+                profile_store,
+            )
+            observed_evidence = _dynamic_observed_evidence(
+                session,
+                evaluation,
+                reflection,
+            )
+            submitted = _dynamic_trial_store().submit(session_id, observed_evidence, evaluation)
+            profile_store.record_observed_evidence(session_id, observed_evidence, evaluation)
+            return submitted
+        except LLMGatewayError as exc:
+            logger.warning("dynamic trial evaluation failed session_id=%s reason=%s", session_id, exc)
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            logger.warning("dynamic trial evaluation invalid session_id=%s reason=%s", session_id, exc)
+            raise HTTPException(status_code=502, detail="Qwen 评价未通过结构化校验，请稍后重试。") from exc
+
+
+async def _evaluate_dynamic_cached(
+    task: TrialTaskDefinition,
+    answer: DynamicTrialAnswer,
+) -> TrialEvaluation:
+    namespace = "dynamic-trial-evaluation"
+    cache_key = ModelResponseCache.fingerprint(
+        {
+            "prompt_version": TrialAgent.PROMPT_VERSION,
+            "model": get_settings().qwen_model,
+            "task": task.model_dump(mode="json"),
+            "answer": _dynamic_answer_cache_payload(answer),
+        }
+    )
+    lock = _model_call_locks.setdefault((namespace, cache_key), asyncio.Lock())
+    async with lock:
+        cached = _model_cache().get(namespace, cache_key)
+        if cached is not None:
+            try:
+                return TrialEvaluation.model_validate(cached)
+            except ValueError:
+                logger.warning("discarding invalid cached dynamic trial evaluation")
+
+        evaluation = await _trial_agent().evaluate_dynamic(task, answer)
+        _model_cache().set(
+            namespace,
+            cache_key,
+            evaluation.model_dump(mode="json"),
         )
-        submitted = _dynamic_trial_store().submit(session_id, observed_evidence, evaluation)
-        profile_store.record_observed_evidence(session_id, observed_evidence, evaluation)
-        return submitted
-    except LLMGatewayError as exc:
-        logger.warning("dynamic trial evaluation failed session_id=%s reason=%s", session_id, exc)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ValueError as exc:
-        logger.warning("dynamic trial evaluation invalid session_id=%s reason=%s", session_id, exc)
-        raise HTTPException(status_code=502, detail="Qwen 评价未通过结构化校验，请稍后重试。") from exc
+        return evaluation
 
 
 @router.post(
@@ -274,27 +326,59 @@ async def _create_reflection(
 ) -> ReflectionProposal:
     cards = profile_store.get_profile().cards
     previous_evidence = profile_store.get_evidence_records()
-    try:
-        return await _reflection_agent().reflect(
-            task,
-            answer,
-            evaluation,
-            cards,
-            previous_evidence,
-        )
-    except (LLMGatewayError, ValueError) as exc:
-        logger.warning(
-            "reflection generation degraded task_id=%s reason=%s",
-            task.id,
-            exc,
-        )
-        return ReflectionAgent.fallback(
-            task,
-            answer,
-            evaluation,
-            cards,
-            previous_evidence,
-        )
+    cache_key = ModelResponseCache.fingerprint(
+        {
+            "prompt_version": ReflectionAgent.PROMPT_VERSION,
+            "model": get_settings().qwen_model,
+            "task": task.model_dump(mode="json"),
+            "answer": (
+                _dynamic_answer_cache_payload(answer)
+                if isinstance(answer, DynamicTrialAnswer)
+                else answer.model_dump(mode="json")
+            ),
+            "evaluation": evaluation.model_dump(mode="json"),
+            "cards": [card.model_dump(mode="json") for card in cards],
+            "previous_evidence": [
+                record.model_dump(mode="json") for record in previous_evidence
+            ],
+        }
+    )
+    namespace = "trial-reflection"
+    lock = _model_call_locks.setdefault((namespace, cache_key), asyncio.Lock())
+    async with lock:
+        cached = _model_cache().get(namespace, cache_key)
+        if cached is not None:
+            try:
+                return ReflectionProposal.model_validate(cached)
+            except ValueError:
+                logger.warning("discarding invalid cached trial reflection")
+        try:
+            reflection = await _reflection_agent().reflect(
+                task,
+                answer,
+                evaluation,
+                cards,
+                previous_evidence,
+            )
+            _model_cache().set(
+                namespace,
+                cache_key,
+                reflection.model_dump(mode="json"),
+            )
+            return reflection
+        except (LLMGatewayError, ValueError) as exc:
+            logger.warning(
+                "reflection generation degraded task_id=%s reason=%s",
+                task.id,
+                exc,
+            )
+            return ReflectionAgent.fallback(
+                task,
+                answer,
+                evaluation,
+                cards,
+                previous_evidence,
+            )
 
 
 def _validate_answer(answer: A02Answer, *, event_revealed: bool) -> None:
@@ -409,26 +493,58 @@ def reveal_trial_event(session_id: str) -> TrialSession:
 
 @router.post("/sessions/{session_id}/submit", response_model=TrialSession)
 async def submit_trial_session(session_id: str) -> TrialSession:
-    session = _get_session(session_id)
-    if session.status == "submitted":
-        return session
-    _validate_answer(session.answer, event_revealed=session.event_revealed)
-    profile_store = _profile_store()
-    try:
-        evaluation = await _trial_agent().evaluate(A02_TASK, session.answer)
-        reflection = await _create_reflection(
-            A02_TASK,
-            session.answer,
-            evaluation,
-            profile_store,
+    lock = _legacy_submission_locks.setdefault(session_id, asyncio.Lock())
+    async with lock:
+        session = _get_session(session_id)
+        if session.status == "submitted":
+            return session
+        _validate_answer(session.answer, event_revealed=session.event_revealed)
+        profile_store = _profile_store()
+        try:
+            evaluation = await _evaluate_legacy_cached(A02_TASK, session.answer)
+            reflection = await _create_reflection(
+                A02_TASK,
+                session.answer,
+                evaluation,
+                profile_store,
+            )
+            observed_evidence = _observed_evidence(session, evaluation, reflection)
+            submitted = _trial_store().submit(session_id, observed_evidence, evaluation)
+            profile_store.record_observed_evidence(session_id, observed_evidence, evaluation)
+            return submitted
+        except LLMGatewayError as exc:
+            logger.warning("trial evaluation failed session_id=%s reason=%s", session_id, exc)
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            logger.warning("trial evaluation invalid session_id=%s reason=%s", session_id, exc)
+            raise HTTPException(status_code=502, detail="Qwen 评价未通过结构化校验，请稍后重试。") from exc
+
+
+async def _evaluate_legacy_cached(
+    task: A02Task,
+    answer: A02Answer,
+) -> TrialEvaluation:
+    namespace = "legacy-trial-evaluation"
+    cache_key = ModelResponseCache.fingerprint(
+        {
+            "prompt_version": TrialAgent.PROMPT_VERSION,
+            "model": get_settings().qwen_model,
+            "task": task.model_dump(mode="json"),
+            "answer": answer.model_dump(mode="json"),
+        }
+    )
+    lock = _model_call_locks.setdefault((namespace, cache_key), asyncio.Lock())
+    async with lock:
+        cached = _model_cache().get(namespace, cache_key)
+        if cached is not None:
+            try:
+                return TrialEvaluation.model_validate(cached)
+            except ValueError:
+                logger.warning("discarding invalid cached legacy trial evaluation")
+        evaluation = await _trial_agent().evaluate(task, answer)
+        _model_cache().set(
+            namespace,
+            cache_key,
+            evaluation.model_dump(mode="json"),
         )
-        observed_evidence = _observed_evidence(session, evaluation, reflection)
-        submitted = _trial_store().submit(session_id, observed_evidence, evaluation)
-        profile_store.record_observed_evidence(session_id, observed_evidence, evaluation)
-        return submitted
-    except LLMGatewayError as exc:
-        logger.warning("trial evaluation failed session_id=%s reason=%s", session_id, exc)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ValueError as exc:
-        logger.warning("trial evaluation invalid session_id=%s reason=%s", session_id, exc)
-        raise HTTPException(status_code=502, detail="Qwen 评价未通过结构化校验，请稍后重试。") from exc
+        return evaluation

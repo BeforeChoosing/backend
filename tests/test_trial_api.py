@@ -16,7 +16,12 @@ from app.services.trial_store import TrialStore
 
 
 class FakeTrialAgent:
+    def __init__(self):
+        self.dynamic_calls = 0
+        self.legacy_calls = 0
+
     async def evaluate(self, task, answer):
+        self.legacy_calls += 1
         return TrialEvaluation(
             summary="完成了结构化归因与事件后重排。",
             dimensions=[
@@ -33,6 +38,7 @@ class FakeTrialAgent:
         )
 
     async def evaluate_dynamic(self, task, answer):
+        self.dynamic_calls += 1
         return TrialEvaluation(
             summary="完成了固定五步交付与事件后调整。",
             dimensions=[
@@ -114,6 +120,26 @@ def _confirm_trial_card(profile_store: ProfileStore) -> None:
             workplace_application="支持 AI 产品范围设计",
         )
     ])
+
+
+def _complete_dynamic_answer() -> dict:
+    return {
+        "selected_card_ids": ["trial-card-1"],
+        "card_play_rationale": "用方案拆解能力划分首版范围。",
+        "validation_hypothesis": "验证能否根据事件约束调整方案。",
+        "card_play_completed": True,
+        "step_answers": {
+            "problem": "优先解决素材整理阻塞。",
+            "evidence": "引用反馈与创作漏斗。",
+            "flow": "AI整理候选，用户确认；首版不自动发布。",
+            "validation": "测试完成率，低于基线则停止。",
+            "event": "周期缩短后收缩到一个整理节点。",
+        },
+        "viewed_material_ids": ["background", "constraints"],
+        "evidence_refs": ["background", "constraints"],
+        "event_decision": "调整",
+        "event_response": "只保留一个模型调用节点。",
+    }
 
 
 def test_trial_api_requires_event_and_returns_observed_evidence(tmp_path, monkeypatch):
@@ -254,3 +280,41 @@ def test_dynamic_workbench_rejects_unconfirmed_card_play(tmp_path, monkeypatch):
 
     assert saved.status_code == 422
     assert saved.json()["detail"] == "能力出牌只能使用已确认的能力卡。"
+
+
+def test_identical_dynamic_answer_reuses_trial_evaluation(tmp_path, monkeypatch):
+    dynamic_store = DynamicTrialStore(tmp_path / "dynamic.db")
+    profile_store = ProfileStore(tmp_path / "profile.db")
+    _confirm_trial_card(profile_store)
+    agent = FakeTrialAgent()
+    monkeypatch.setattr(trial_api, "_dynamic_trial_store", lambda: dynamic_store)
+    monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
+    monkeypatch.setattr(trial_api, "_trial_agent", lambda: agent)
+    monkeypatch.setattr(trial_api, "_reflection_agent", lambda: FailingReflectionAgent())
+    client = TestClient(app)
+
+    for _ in range(2):
+        created = client.post(
+            "/api/v1/trial/workbench/sessions",
+            json={"task_id": "F-01"},
+        )
+        session_id = created.json()["id"]
+        coach = client.post(
+            f"/api/v1/trial/workbench/sessions/{session_id}/coach",
+            json={"level": 1},
+        )
+        assert coach.status_code == 200
+        saved = client.put(
+            f"/api/v1/trial/workbench/sessions/{session_id}/answer",
+            json={"answer": _complete_dynamic_answer()},
+        )
+        assert saved.status_code == 200
+        assert client.post(
+            f"/api/v1/trial/workbench/sessions/{session_id}/event"
+        ).status_code == 200
+        submitted = client.post(
+            f"/api/v1/trial/workbench/sessions/{session_id}/submit"
+        )
+        assert submitted.status_code == 200
+
+    assert agent.dynamic_calls == 1

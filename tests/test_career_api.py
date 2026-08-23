@@ -49,7 +49,11 @@ class _FakeRetriever:
 
 
 class _FakeCareerAgent:
+    def __init__(self):
+        self.calls = 0
+
     async def recommend(self, cards, retrieved, next_task, next_task_reason):
+        self.calls += 1
         return CareerRecommendation(
             summary=f"已基于 {cards[0].title} 形成 AI 产品经理探索建议。",
             supported=[
@@ -107,3 +111,30 @@ def test_career_recommendation_rejects_unconfirmed_card(tmp_path, monkeypatch):
     )
 
     assert response.status_code == 422
+
+
+def test_career_recommendation_reuses_identical_model_result(tmp_path, monkeypatch):
+    store = ProfileStore(tmp_path / "profile.db")
+    store.confirm_cards(
+        [CardProposal.model_validate(_card_payload())],
+        trace_id="trace-career-cache",
+    )
+    agent = _FakeCareerAgent()
+    monkeypatch.setattr(career_api, "_profile_store", lambda: store)
+    monkeypatch.setattr(career_api, "_knowledge_retriever", lambda: _FakeRetriever())
+    monkeypatch.setattr(career_api, "_career_agent", lambda: agent)
+    client = TestClient(app)
+
+    first = client.post(
+        "/api/v1/career/recommendations",
+        json={"selected_card_ids": ["career-card-1"]},
+    )
+    second = client.post(
+        "/api/v1/career/recommendations",
+        json={"selected_card_ids": ["career-card-1"]},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    assert agent.calls == 1
