@@ -40,6 +40,16 @@ class TrialTaskMaterial(BaseModel):
     is_simulated: bool = True
 
 
+class TrialAbilityChallenge(BaseModel):
+    id: str
+    title: str
+    scenario: str
+    prompt: str = "选择可用于完成这一任务要求的能力卡。"
+    target_skills: list[str] = Field(min_length=1, max_length=3)
+    reference_behavior: str
+    max_cards: int = Field(default=3, ge=1, le=4)
+
+
 class TrialTaskDefinition(BaseModel):
     id: TaskId
     track: Literal["feature", "agent", "platform", "model"]
@@ -60,6 +70,11 @@ class TrialTaskDefinition(BaseModel):
     event: TrialTaskEvent
     coach_prompts: list[str] = Field(min_length=3, max_length=3)
     rubric: list[TrialTaskRubricCriterion]
+    ability_challenges: list[TrialAbilityChallenge] = Field(
+        default_factory=list,
+        min_length=3,
+        max_length=3,
+    )
     level_anchors: dict[Literal["L1", "L2", "L3", "L4", "L5"], str] = Field(default_factory=dict)
     source_note: str = "任务结构来自 CoachAgent AI 产品经理职业试路任务库 v2.0；业务数字与案例为模拟试路材料。"
 
@@ -85,8 +100,19 @@ class TrialTaskRecommendation(BaseModel):
     selection_policy: str = "基于已确认能力卡、待验证项、职业方向与已完成任务进行确定性排序；Qwen 不生成或改写任务。"
 
 
+class DynamicTrialCardPlayRound(BaseModel):
+    challenge_id: str
+    selected_card_ids: list[str] = Field(default_factory=list, max_length=3)
+    match_level: Literal["high", "partial", "low"] | None = None
+    matched_card_ids: list[str] = Field(default_factory=list, max_length=3)
+    matched_skills: list[str] = Field(default_factory=list, max_length=3)
+    feedback: str = Field(default="", max_length=800)
+
+
 class DynamicTrialAnswer(BaseModel):
-    selected_card_ids: list[str] = Field(default_factory=list, max_length=4)
+    selected_card_ids: list[str] = Field(default_factory=list, max_length=12)
+    card_play_rounds: list[DynamicTrialCardPlayRound] = Field(default_factory=list, max_length=3)
+    card_play_current_index: int = Field(default=0, ge=0, le=2)
     card_play_rationale: str = Field(default="", max_length=1200)
     validation_hypothesis: str = Field(default="", max_length=600)
     card_play_completed: bool = False

@@ -2,17 +2,9 @@ from collections import Counter
 
 from app.schemas.profile import ProfileCard, ProfileEvidenceRecord
 from app.schemas.task_catalog import TaskId, TrialTaskCandidate, TrialTaskRecommendation
+from app.services.ability_matching import CATEGORY_SKILL_WEIGHTS
 from app.tasks.catalog import TASK_CATALOG
 
-
-CATEGORY_SKILL_WEIGHTS: dict[str, dict[str, float]] = {
-    "洞察分析": {"用户洞察": 8, "数据驱动": 2, "模型评测": 1},
-    "产品策略": {"方案与交互": 6, "商业意识": 5, "AI产品化": 3},
-    "技术落地": {"AI产品化": 8, "模型评测": 4, "方案与交互": 2},
-    "数据驱动": {"数据驱动": 8, "模型评测": 5, "用户洞察": 2},
-    "协作沟通": {"跨团队落地": 7, "商业意识": 5, "方案与交互": 2},
-    "交互体验": {"方案与交互": 8, "用户洞察": 4, "AI产品化": 2},
-}
 
 TRACK_KEYWORDS: dict[str, tuple[str, ...]] = {
     "feature": ("用户", "体验", "功能", "流程", "交互", "需求", "创作", "留存", "复用"),

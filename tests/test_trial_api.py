@@ -13,6 +13,7 @@ from app.services.dynamic_trial_store import DynamicTrialStore
 from app.services.llm_gateway import LLMGatewayError
 from app.services.profile_store import ProfileStore
 from app.services.trial_store import TrialStore
+from app.tasks.catalog import get_task_definition
 
 
 class FakeTrialAgent:
@@ -280,6 +281,49 @@ def test_dynamic_workbench_rejects_unconfirmed_card_play(tmp_path, monkeypatch):
 
     assert saved.status_code == 422
     assert saved.json()["detail"] == "能力出牌只能使用已确认的能力卡。"
+
+
+def test_dynamic_workbench_persists_three_card_play_challenges_without_model_call(
+    tmp_path,
+    monkeypatch,
+):
+    dynamic_store = DynamicTrialStore(tmp_path / "dynamic.db")
+    profile_store = ProfileStore(tmp_path / "profile.db")
+    _confirm_trial_card(profile_store)
+    monkeypatch.setattr(trial_api, "_dynamic_trial_store", lambda: dynamic_store)
+    monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
+    client = TestClient(app)
+
+    task = get_task_definition("F-01")
+    created = client.post(
+        "/api/v1/trial/workbench/sessions",
+        json={"task_id": task.id},
+    )
+    session_id = created.json()["id"]
+    saved = client.put(
+        f"/api/v1/trial/workbench/sessions/{session_id}/answer",
+        json={
+            "answer": {
+                "selected_card_ids": ["stale-client-value"],
+                "card_play_rounds": [
+                    {
+                        "challenge_id": challenge.id,
+                        "selected_card_ids": ["trial-card-1"],
+                    }
+                    for challenge in task.ability_challenges
+                ],
+                "card_play_current_index": 2,
+                "card_play_completed": True,
+            }
+        },
+    )
+
+    assert saved.status_code == 200
+    answer = saved.json()["answer"]
+    assert answer["selected_card_ids"] == ["trial-card-1"]
+    assert len(answer["card_play_rounds"]) == 3
+    assert all(item["match_level"] for item in answer["card_play_rounds"])
+    assert all(item["feedback"] for item in answer["card_play_rounds"])
 
 
 def test_identical_dynamic_answer_reuses_trial_evaluation(tmp_path, monkeypatch):

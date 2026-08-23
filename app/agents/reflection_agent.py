@@ -250,12 +250,18 @@ class ReflectionAgent:
         }
         allowed_types = {"新增证据", "加强证据", "冲突证据", "仍待验证"}
         changes: list[ReflectionChange] = []
-        for item in (raw.get("changes") or [])[:6]:
+        raw_changes = raw.get("changes")
+        if not isinstance(raw_changes, list):
+            raise ValueError("Qwen 返回的 changes 必须是数组")
+        for item in raw_changes[:6]:
             if not isinstance(item, dict):
+                continue
+            raw_refs = item.get("evidence_refs")
+            if not isinstance(raw_refs, list):
                 continue
             refs = [
                 str(reference_id)
-                for reference_id in (item.get("evidence_refs") or [])
+                for reference_id in raw_refs
                 if str(reference_id) in allowed_refs
             ][:8]
             if not refs:

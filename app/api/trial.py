@@ -30,6 +30,7 @@ from app.schemas.task_catalog import (
     TrialTaskRecommendationRequest,
 )
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
+from app.services.ability_matching import evaluate_card_play_round
 from app.services.dynamic_trial_store import DynamicTrialStore
 from app.services.model_response_cache import ModelResponseCache
 from app.services.profile_store import ProfileStore
@@ -136,8 +137,11 @@ def save_dynamic_trial_answer(
     request: DynamicTrialAnswerUpdateRequest,
 ) -> DynamicTrialSession:
     try:
+        session = _get_dynamic_session(session_id)
+        profile_store = _profile_store()
+        _normalize_card_play(session.task_id, request.answer, profile_store)
         if request.answer.card_play_completed:
-            _validate_card_play(request.answer, _profile_store())
+            _validate_card_play(session.task_id, request.answer, profile_store)
         return _dynamic_trial_store().save_answer(session_id, request.answer)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="试路会话不存在。") from exc
@@ -161,7 +165,7 @@ async def submit_dynamic_trial_session(session_id: str) -> DynamicTrialSession:
         if session.status == "submitted":
             return session
         profile_store = _profile_store()
-        _validate_card_play(session.answer, profile_store)
+        _validate_card_play(session.task_id, session.answer, profile_store)
         _validate_dynamic_answer(
             session.task_id,
             session.answer,
@@ -275,13 +279,71 @@ def _validate_dynamic_answer(task_id: str, answer: DynamicTrialAnswer, *, event_
         raise HTTPException(status_code=422, detail="请填写中途事件后的维持或调整决定及依据。")
 
 
-def _validate_card_play(
+def _normalize_card_play(
+    task_id: str,
     answer: DynamicTrialAnswer,
     profile_store: ProfileStore,
 ) -> None:
-    selected_ids = list(dict.fromkeys(answer.selected_card_ids))
+    if not answer.card_play_rounds:
+        return
+
+    task = get_task_definition(task_id)
+    challenges = {challenge.id: challenge for challenge in task.ability_challenges}
+    round_ids = [item.challenge_id for item in answer.card_play_rounds]
+    if len(round_ids) != len(set(round_ids)):
+        raise HTTPException(status_code=422, detail="同一个能力应用挑战不能重复提交。")
+
+    normalized_rounds = []
+    selected_union: list[str] = []
+    for item in answer.card_play_rounds:
+        challenge = challenges.get(item.challenge_id)
+        if challenge is None:
+            raise HTTPException(status_code=422, detail="能力应用挑战不属于当前任务。")
+        selected_ids = list(dict.fromkeys(item.selected_card_ids))
+        if len(selected_ids) != len(item.selected_card_ids):
+            raise HTTPException(status_code=422, detail="同一挑战不能重复选择能力卡。")
+        cards = profile_store.get_cards_by_ids(selected_ids)
+        if len(cards) != len(selected_ids):
+            raise HTTPException(status_code=422, detail="能力出牌只能使用已确认的能力卡。")
+        cards_by_id = {card.id: card for card in cards}
+        ordered_cards = [cards_by_id[card_id] for card_id in selected_ids]
+        try:
+            normalized_rounds.append(
+                evaluate_card_play_round(challenge, ordered_cards)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        for card_id in selected_ids:
+            if card_id not in selected_union:
+                selected_union.append(card_id)
+
+    answer.card_play_rounds = normalized_rounds
+    answer.selected_card_ids = selected_union
+
+
+def _validate_card_play(
+    task_id: str,
+    answer: DynamicTrialAnswer,
+    profile_store: ProfileStore,
+) -> None:
     if not answer.card_play_completed:
         raise HTTPException(status_code=422, detail="请先完成能力出牌阶段。")
+
+    if answer.card_play_rounds:
+        task = get_task_definition(task_id)
+        expected_ids = {challenge.id for challenge in task.ability_challenges}
+        completed_ids = {item.challenge_id for item in answer.card_play_rounds}
+        if completed_ids != expected_ids or len(answer.card_play_rounds) != len(expected_ids):
+            raise HTTPException(status_code=422, detail="请先完成全部三个能力应用挑战。")
+        if any(item.match_level is None or not item.feedback for item in answer.card_play_rounds):
+            raise HTTPException(status_code=422, detail="能力应用挑战缺少匹配反馈。")
+        if len(profile_store.get_cards_by_ids(answer.selected_card_ids)) != len(
+            answer.selected_card_ids
+        ):
+            raise HTTPException(status_code=422, detail="能力出牌只能使用已确认的能力卡。")
+        return
+
+    selected_ids = list(dict.fromkeys(answer.selected_card_ids))
     if not 1 <= len(selected_ids) <= 4 or len(selected_ids) != len(answer.selected_card_ids):
         raise HTTPException(status_code=422, detail="能力出牌需要选择 1–4 张不同的已确认能力卡。")
     if not answer.card_play_rationale.strip():

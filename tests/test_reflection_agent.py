@@ -1,3 +1,5 @@
+import pytest
+
 from app.agents.reflection_agent import ReflectionAgent
 from app.schemas.task_catalog import DynamicTrialAnswer
 from app.schemas.trial import TrialDimensionEvaluation, TrialEvaluation
@@ -76,3 +78,38 @@ def test_reflection_fallback_is_explicit_and_conservative() -> None:
     assert reflection.generation_mode == "deterministic_fallback"
     assert reflection.changes[0].change_type == "仍待验证"
     assert reflection.profile_update_allowed is False
+
+
+def test_reflection_rejects_non_array_changes() -> None:
+    task = get_task_definition("F-03")
+    evaluation = _evaluation(task.primary_skill)
+
+    with pytest.raises(ValueError, match="changes 必须是数组"):
+        ReflectionAgent._normalize(
+            {"changes": {"ability": task.primary_skill}},
+            task,
+            evaluation,
+            [{"reference_id": "answer:scope", "content": "收缩首版范围"}],
+        )
+
+
+def test_reflection_ignores_non_array_evidence_refs() -> None:
+    task = get_task_definition("F-03")
+    evaluation = _evaluation(task.primary_skill)
+
+    with pytest.raises(ValueError, match="有效证据引用"):
+        ReflectionAgent._normalize(
+            {
+                "changes": [
+                    {
+                        "ability": task.primary_skill,
+                        "statement": "事件后调整了范围。",
+                        "evidence_refs": {"answer:scope": True},
+                        "basis": "作答中明确收缩了范围。",
+                    }
+                ]
+            },
+            task,
+            evaluation,
+            [{"reference_id": "answer:scope", "content": "收缩首版范围"}],
+        )
