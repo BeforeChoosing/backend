@@ -17,6 +17,7 @@ AttributionLayer = Literal[
 ]
 Confidence = Literal["低", "中", "高"]
 EventDecision = Literal["维持", "调整"]
+ReflectionChangeType = Literal["新增证据", "加强证据", "冲突证据", "仍待验证"]
 
 
 class A02Metric(BaseModel):
@@ -101,19 +102,6 @@ class A02Answer(BaseModel):
     event_reason: str = Field(default="", max_length=500)
 
 
-class ObservedEvidence(BaseModel):
-    task_id: str
-    statement: str
-    completed_steps: list[str]
-    evidence_refs: list[str]
-    caveats: list[str]
-    primary_ability: str | None = None
-    observed_level: Literal["L1", "L2", "L3", "L4", "L5", "证据不足"] | None = None
-    level_reason: str | None = None
-    confidence: Literal["低", "中", "高"] | None = None
-    coach_dependency: Literal["独立完成", "轻度提示", "方向性提示", "强提示"] | None = None
-
-
 class TrialDimensionEvaluation(BaseModel):
     dimension: str
     weight: int = Field(default=0, ge=0, le=100)
@@ -140,6 +128,41 @@ class TrialEvaluation(BaseModel):
     gaps: list[str] = Field(max_length=5)
     next_step: str = Field(max_length=300)
     confidence: Literal["低", "中", "高"]
+
+
+class ReflectionChange(BaseModel):
+    """One evidence-bound proposal produced after a completed trial."""
+
+    change_type: ReflectionChangeType
+    ability: str = Field(min_length=1, max_length=120)
+    statement: str = Field(min_length=1, max_length=400)
+    evidence_refs: list[str] = Field(min_length=1, max_length=8)
+    basis: str = Field(min_length=1, max_length=500)
+
+
+class ReflectionProposal(BaseModel):
+    """A review proposal that cannot directly mutate confirmed profile cards."""
+
+    summary: str = Field(min_length=1, max_length=600)
+    changes: list[ReflectionChange] = Field(min_length=1, max_length=6)
+    next_verification: str = Field(min_length=1, max_length=300)
+    generation_mode: Literal["model", "deterministic_fallback"] = "model"
+    profile_update_allowed: Literal[False] = False
+    notice: str = "复盘只形成证据变更提案，不会直接修改已确认能力卡。"
+
+
+class ObservedEvidence(BaseModel):
+    task_id: str
+    statement: str
+    completed_steps: list[str]
+    evidence_refs: list[str]
+    caveats: list[str]
+    primary_ability: str | None = None
+    observed_level: Literal["L1", "L2", "L3", "L4", "L5", "证据不足"] | None = None
+    level_reason: str | None = None
+    confidence: Literal["低", "中", "高"] | None = None
+    coach_dependency: Literal["独立完成", "轻度提示", "方向性提示", "强提示"] | None = None
+    reflection: ReflectionProposal | None = None
 
 
 class TrialSession(BaseModel):

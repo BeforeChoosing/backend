@@ -2,7 +2,12 @@ from fastapi.testclient import TestClient
 
 from app.api import trial as trial_api
 from app.main import app
-from app.schemas.trial import TrialDimensionEvaluation, TrialEvaluation
+from app.schemas.trial import (
+    ReflectionChange,
+    ReflectionProposal,
+    TrialDimensionEvaluation,
+    TrialEvaluation,
+)
 from app.services.dynamic_trial_store import DynamicTrialStore
 from app.services.profile_store import ProfileStore
 from app.services.trial_store import TrialStore
@@ -49,6 +54,23 @@ class FakeTrialAgent:
         )
 
 
+class FakeReflectionAgent:
+    async def reflect(self, task, answer, evaluation, cards, previous_evidence):
+        return ReflectionProposal(
+            summary="本次任务形成了一条待继续验证的行为证据。",
+            changes=[
+                ReflectionChange(
+                    change_type="新增证据",
+                    ability=evaluation.primary_ability or task.primary_skill,
+                    statement="用户完成了任务要求的判断和事件后调整。",
+                    evidence_refs=["evaluation:level"],
+                    basis=evaluation.level_reason or evaluation.summary,
+                )
+            ],
+            next_verification=evaluation.next_step,
+        )
+
+
 def _complete_answer() -> dict:
     return {
         "attributions": [
@@ -76,6 +98,7 @@ def test_trial_api_requires_event_and_returns_observed_evidence(tmp_path, monkey
     monkeypatch.setattr(trial_api, "_trial_store", lambda: trial_store)
     monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
     monkeypatch.setattr(trial_api, "_trial_agent", lambda: FakeTrialAgent())
+    monkeypatch.setattr(trial_api, "_reflection_agent", lambda: FakeReflectionAgent())
     client = TestClient(app)
 
     preflight = client.options(
@@ -112,6 +135,7 @@ def test_trial_api_requires_event_and_returns_observed_evidence(tmp_path, monkey
     payload = submitted.json()
     assert payload["status"] == "submitted"
     assert payload["observed_evidence"]["task_id"] == "A-02"
+    assert payload["observed_evidence"]["reflection"]["profile_update_allowed"] is False
     assert profile_store.get_profile().version == 1
 
 
@@ -121,6 +145,7 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
     monkeypatch.setattr(trial_api, "_dynamic_trial_store", lambda: dynamic_store)
     monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
     monkeypatch.setattr(trial_api, "_trial_agent", lambda: FakeTrialAgent())
+    monkeypatch.setattr(trial_api, "_reflection_agent", lambda: FakeReflectionAgent())
     client = TestClient(app)
 
     task = client.get("/api/v1/trial/catalog/F-01")
@@ -169,4 +194,5 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
     assert evidence["observed_level"] == "L3"
     assert evidence["primary_ability"] == "用户洞察"
     assert evidence["coach_dependency"] == "方向性提示"
+    assert evidence["reflection"]["generation_mode"] == "model"
     assert profile_store.get_completed_task_ids() == ["F-01"]

@@ -3,12 +3,14 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
+from app.agents.reflection_agent import ReflectionAgent
 from app.agents.trial_agent import TrialAgent
 from app.config import get_settings
 from app.schemas.trial import (
     A02Answer,
     A02Task,
     ObservedEvidence,
+    ReflectionProposal,
     TrialAnswerUpdateRequest,
     TrialSession,
     TrialSessionCreateRequest,
@@ -43,6 +45,10 @@ def _trial_store() -> TrialStore:
 
 def _trial_agent() -> TrialAgent:
     return TrialAgent(DashScopeQwenGateway(get_settings()))
+
+
+def _reflection_agent() -> ReflectionAgent:
+    return ReflectionAgent(DashScopeQwenGateway(get_settings()))
 
 
 def _profile_store() -> ProfileStore:
@@ -137,11 +143,22 @@ async def submit_dynamic_trial_session(session_id: str) -> DynamicTrialSession:
         event_revealed=session.event_revealed,
     )
     task = get_task_definition(session.task_id)
+    profile_store = _profile_store()
     try:
         evaluation = await _trial_agent().evaluate_dynamic(task, session.answer)
-        observed_evidence = _dynamic_observed_evidence(session, evaluation)
+        reflection = await _create_reflection(
+            task,
+            session.answer,
+            evaluation,
+            profile_store,
+        )
+        observed_evidence = _dynamic_observed_evidence(
+            session,
+            evaluation,
+            reflection,
+        )
         submitted = _dynamic_trial_store().submit(session_id, observed_evidence, evaluation)
-        _profile_store().record_observed_evidence(session_id, observed_evidence, evaluation)
+        profile_store.record_observed_evidence(session_id, observed_evidence, evaluation)
         return submitted
     except LLMGatewayError as exc:
         logger.warning("dynamic trial evaluation failed session_id=%s reason=%s", session_id, exc)
@@ -206,6 +223,7 @@ def _validate_dynamic_answer(task_id: str, answer: DynamicTrialAnswer, *, event_
 def _dynamic_observed_evidence(
     session: DynamicTrialSession,
     evaluation,
+    reflection: ReflectionProposal,
 ) -> ObservedEvidence:
     task = get_task_definition(session.task_id)
     return ObservedEvidence(
@@ -224,7 +242,39 @@ def _dynamic_observed_evidence(
         level_reason=evaluation.level_reason,
         confidence=evaluation.confidence,
         coach_dependency=evaluation.coach_dependency,
+        reflection=reflection,
     )
+
+
+async def _create_reflection(
+    task: A02Task | TrialTaskDefinition,
+    answer: A02Answer | DynamicTrialAnswer,
+    evaluation,
+    profile_store: ProfileStore,
+) -> ReflectionProposal:
+    cards = profile_store.get_profile().cards
+    previous_evidence = profile_store.get_evidence_records()
+    try:
+        return await _reflection_agent().reflect(
+            task,
+            answer,
+            evaluation,
+            cards,
+            previous_evidence,
+        )
+    except (LLMGatewayError, ValueError) as exc:
+        logger.warning(
+            "reflection generation degraded task_id=%s reason=%s",
+            task.id,
+            exc,
+        )
+        return ReflectionAgent.fallback(
+            task,
+            answer,
+            evaluation,
+            cards,
+            previous_evidence,
+        )
 
 
 def _validate_answer(answer: A02Answer, *, event_revealed: bool) -> None:
@@ -270,7 +320,11 @@ def _validate_answer(answer: A02Answer, *, event_revealed: bool) -> None:
         raise HTTPException(status_code=422, detail="请说明中途事件如何改变或确认你的判断。")
 
 
-def _observed_evidence(session: TrialSession) -> ObservedEvidence:
+def _observed_evidence(
+    session: TrialSession,
+    evaluation,
+    reflection: ReflectionProposal,
+) -> ObservedEvidence:
     answer = session.answer
     return ObservedEvidence(
         task_id=session.task_id,
@@ -287,6 +341,12 @@ def _observed_evidence(session: TrialSession) -> ObservedEvidence:
             "这次任务只记录本次表现，不代表长期能力或岗位认证。",
             "运行指标和案例都是练习材料。",
         ],
+        primary_ability=evaluation.primary_ability,
+        observed_level=evaluation.observed_level,
+        level_reason=evaluation.level_reason,
+        confidence=evaluation.confidence,
+        coach_dependency=evaluation.coach_dependency,
+        reflection=reflection,
     )
 
 
@@ -333,11 +393,18 @@ async def submit_trial_session(session_id: str) -> TrialSession:
     if session.status == "submitted":
         return session
     _validate_answer(session.answer, event_revealed=session.event_revealed)
+    profile_store = _profile_store()
     try:
         evaluation = await _trial_agent().evaluate(A02_TASK, session.answer)
-        observed_evidence = _observed_evidence(session)
+        reflection = await _create_reflection(
+            A02_TASK,
+            session.answer,
+            evaluation,
+            profile_store,
+        )
+        observed_evidence = _observed_evidence(session, evaluation, reflection)
         submitted = _trial_store().submit(session_id, observed_evidence, evaluation)
-        _profile_store().record_observed_evidence(session_id, observed_evidence, evaluation)
+        profile_store.record_observed_evidence(session_id, observed_evidence, evaluation)
         return submitted
     except LLMGatewayError as exc:
         logger.warning("trial evaluation failed session_id=%s reason=%s", session_id, exc)
