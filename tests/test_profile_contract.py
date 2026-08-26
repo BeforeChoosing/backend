@@ -67,6 +67,8 @@ def test_profile_agent_downgrades_unverifiable_quote():
 class ExplorationGateway:
     def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
         assert "不重复此前 assistant 已经给出的引导" in system_prompt
+        assert "先用一个短句回应用户刚刚说清的具体行动或结果" in system_prompt
+        assert "不像审核表或访谈提纲" in system_prompt
         assert "校园项目" in user_prompt
         assert "负责访谈" in user_prompt
         return {
