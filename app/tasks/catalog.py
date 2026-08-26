@@ -1,4 +1,5 @@
 from app.schemas.task_catalog import (
+    TrialAbilityChallenge,
     TrialTaskDefinition,
     TrialTaskEvent,
     TrialTaskRubricCriterion,
@@ -421,3 +422,16 @@ for _task_id, _task_definition in TASK_CATALOG.items():
         instruction=_instruction,
     )
     _task_definition.coach_prompts = _source["coach"]  # type: ignore[assignment]
+    _task_definition.ability_challenges = [
+        TrialAbilityChallenge(
+            id=f"{_task_id}-C{index:02d}",
+            title=f"挑战 {index:02d} · {criterion.dimension}",
+            scenario=(
+                f"{_task_definition.goal}\n"
+                f"本轮重点：{criterion.observable_behavior}"
+            ),
+            target_skills=[criterion.dimension],
+            reference_behavior=criterion.observable_behavior,
+        )
+        for index, criterion in enumerate(_task_definition.rubric[:3], start=1)
+    ]

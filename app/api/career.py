@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from functools import lru_cache
 
@@ -8,12 +9,14 @@ from app.config import get_settings
 from app.knowledge.retriever import KnowledgeRetriever
 from app.schemas.career import CareerRecommendation, CareerRecommendationRequest
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
+from app.services.model_response_cache import ModelResponseCache
 from app.services.profile_store import ProfileStore
 from app.services.task_selector import recommend_trial_task
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/career", tags=["career"])
 AI_PRODUCT_MANAGER_DOCUMENT_ID = "job-ai-product-manager-v1"
+_recommendation_locks: dict[str, asyncio.Lock] = {}
 
 
 def _profile_store() -> ProfileStore:
@@ -30,11 +33,15 @@ def _career_agent() -> CareerAgent:
     return CareerAgent(DashScopeQwenGateway(get_settings()))
 
 
+def _model_cache() -> ModelResponseCache:
+    return ModelResponseCache(_profile_store().db_path)
+
+
 @router.post("/recommendations", response_model=CareerRecommendation)
 async def create_career_recommendation(
     request: CareerRecommendationRequest,
 ) -> CareerRecommendation:
-    selected_ids = list(dict.fromkeys(request.selected_card_ids))
+    selected_ids = sorted(dict.fromkeys(request.selected_card_ids))
     cards = _profile_store().get_cards_by_ids(selected_ids)
     if len(cards) != len(selected_ids):
         raise HTTPException(status_code=422, detail="请先选择你已经确认过的能力卡。")
@@ -57,12 +64,37 @@ async def create_career_recommendation(
             evidence_records=_profile_store().get_evidence_records(),
             target_role=request.target_role,
         )
-        return await _career_agent().recommend(
-            cards,
-            retrieved,
-            task_recommendation.selected_task,
-            task_recommendation.reason,
+        cache_key = ModelResponseCache.fingerprint(
+            {
+                "prompt_version": CareerAgent.PROMPT_VERSION,
+                "model": get_settings().qwen_model,
+                "cards": [card.model_dump(mode="json") for card in cards],
+                "retrieved": [chunk.__dict__ for chunk in retrieved],
+                "next_task": task_recommendation.selected_task.model_dump(mode="json"),
+                "next_task_reason": task_recommendation.reason,
+            }
         )
+        lock = _recommendation_locks.setdefault(cache_key, asyncio.Lock())
+        async with lock:
+            cached = _model_cache().get("career-recommendation", cache_key)
+            if cached is not None:
+                try:
+                    return CareerRecommendation.model_validate(cached)
+                except ValueError:
+                    logger.warning("discarding invalid cached career recommendation")
+
+            recommendation = await _career_agent().recommend(
+                cards,
+                retrieved,
+                task_recommendation.selected_task,
+                task_recommendation.reason,
+            )
+            _model_cache().set(
+                "career-recommendation",
+                cache_key,
+                recommendation.model_dump(mode="json"),
+            )
+            return recommendation
     except HTTPException:
         raise
     except FileNotFoundError as exc:

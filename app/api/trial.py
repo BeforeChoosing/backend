@@ -1,15 +1,19 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
+from app.agents.reflection_agent import ReflectionAgent
 from app.agents.trial_agent import TrialAgent
 from app.config import get_settings
 from app.schemas.trial import (
     A02Answer,
     A02Task,
     ObservedEvidence,
+    ReflectionProposal,
     TrialAnswerUpdateRequest,
+    TrialEvaluation,
     TrialSession,
     TrialSessionCreateRequest,
 )
@@ -26,7 +30,9 @@ from app.schemas.task_catalog import (
     TrialTaskRecommendationRequest,
 )
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
+from app.services.ability_matching import evaluate_card_play_round
 from app.services.dynamic_trial_store import DynamicTrialStore
+from app.services.model_response_cache import ModelResponseCache
 from app.services.profile_store import ProfileStore
 from app.services.trial_store import TrialStore
 from app.services.task_selector import recommend_trial_task
@@ -35,6 +41,9 @@ from app.tasks.catalog import get_task_definition, list_task_definitions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/trial", tags=["trial"])
+_dynamic_submission_locks: dict[str, asyncio.Lock] = {}
+_legacy_submission_locks: dict[str, asyncio.Lock] = {}
+_model_call_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
 
 def _trial_store() -> TrialStore:
@@ -45,12 +54,29 @@ def _trial_agent() -> TrialAgent:
     return TrialAgent(DashScopeQwenGateway(get_settings()))
 
 
+def _reflection_agent() -> ReflectionAgent:
+    return ReflectionAgent(DashScopeQwenGateway(get_settings()))
+
+
 def _profile_store() -> ProfileStore:
     return ProfileStore(get_settings().profile_db_path)
 
 
 def _dynamic_trial_store() -> DynamicTrialStore:
     return DynamicTrialStore(get_settings().profile_db_path)
+
+
+def _model_cache() -> ModelResponseCache:
+    return ModelResponseCache(_profile_store().db_path)
+
+
+def _dynamic_answer_cache_payload(answer: DynamicTrialAnswer) -> dict:
+    payload = answer.model_dump(mode="json")
+    payload["coach_usage"] = [
+        {"level": usage.level, "prompt": usage.prompt}
+        for usage in answer.coach_usage
+    ]
+    return payload
 
 
 def _get_task(task_id: str) -> A02Task:
@@ -111,6 +137,11 @@ def save_dynamic_trial_answer(
     request: DynamicTrialAnswerUpdateRequest,
 ) -> DynamicTrialSession:
     try:
+        session = _get_dynamic_session(session_id)
+        profile_store = _profile_store()
+        _normalize_card_play(session.task_id, request.answer, profile_store)
+        if request.answer.card_play_completed:
+            _validate_card_play(session.task_id, request.answer, profile_store)
         return _dynamic_trial_store().save_answer(session_id, request.answer)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="试路会话不存在。") from exc
@@ -128,27 +159,72 @@ def reveal_dynamic_trial_event(session_id: str) -> DynamicTrialSession:
 
 @router.post("/workbench/sessions/{session_id}/submit", response_model=DynamicTrialSession)
 async def submit_dynamic_trial_session(session_id: str) -> DynamicTrialSession:
-    session = _get_dynamic_session(session_id)
-    if session.status == "submitted":
-        return session
-    _validate_dynamic_answer(
-        session.task_id,
-        session.answer,
-        event_revealed=session.event_revealed,
+    lock = _dynamic_submission_locks.setdefault(session_id, asyncio.Lock())
+    async with lock:
+        session = _get_dynamic_session(session_id)
+        if session.status == "submitted":
+            return session
+        profile_store = _profile_store()
+        _validate_card_play(session.task_id, session.answer, profile_store)
+        _validate_dynamic_answer(
+            session.task_id,
+            session.answer,
+            event_revealed=session.event_revealed,
+        )
+        task = get_task_definition(session.task_id)
+        try:
+            evaluation = await _evaluate_dynamic_cached(task, session.answer)
+            reflection = await _create_reflection(
+                task,
+                session.answer,
+                evaluation,
+                profile_store,
+            )
+            observed_evidence = _dynamic_observed_evidence(
+                session,
+                evaluation,
+                reflection,
+            )
+            submitted = _dynamic_trial_store().submit(session_id, observed_evidence, evaluation)
+            profile_store.record_observed_evidence(session_id, observed_evidence, evaluation)
+            return submitted
+        except LLMGatewayError as exc:
+            logger.warning("dynamic trial evaluation failed session_id=%s reason=%s", session_id, exc)
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            logger.warning("dynamic trial evaluation invalid session_id=%s reason=%s", session_id, exc)
+            raise HTTPException(status_code=502, detail="Qwen 评价未通过结构化校验，请稍后重试。") from exc
+
+
+async def _evaluate_dynamic_cached(
+    task: TrialTaskDefinition,
+    answer: DynamicTrialAnswer,
+) -> TrialEvaluation:
+    namespace = "dynamic-trial-evaluation"
+    cache_key = ModelResponseCache.fingerprint(
+        {
+            "prompt_version": TrialAgent.PROMPT_VERSION,
+            "model": get_settings().qwen_model,
+            "task": task.model_dump(mode="json"),
+            "answer": _dynamic_answer_cache_payload(answer),
+        }
     )
-    task = get_task_definition(session.task_id)
-    try:
-        evaluation = await _trial_agent().evaluate_dynamic(task, session.answer)
-        observed_evidence = _dynamic_observed_evidence(session, evaluation)
-        submitted = _dynamic_trial_store().submit(session_id, observed_evidence, evaluation)
-        _profile_store().record_observed_evidence(session_id, observed_evidence, evaluation)
-        return submitted
-    except LLMGatewayError as exc:
-        logger.warning("dynamic trial evaluation failed session_id=%s reason=%s", session_id, exc)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ValueError as exc:
-        logger.warning("dynamic trial evaluation invalid session_id=%s reason=%s", session_id, exc)
-        raise HTTPException(status_code=502, detail="Qwen 评价未通过结构化校验，请稍后重试。") from exc
+    lock = _model_call_locks.setdefault((namespace, cache_key), asyncio.Lock())
+    async with lock:
+        cached = _model_cache().get(namespace, cache_key)
+        if cached is not None:
+            try:
+                return TrialEvaluation.model_validate(cached)
+            except ValueError:
+                logger.warning("discarding invalid cached dynamic trial evaluation")
+
+        evaluation = await _trial_agent().evaluate_dynamic(task, answer)
+        _model_cache().set(
+            namespace,
+            cache_key,
+            evaluation.model_dump(mode="json"),
+        )
+        return evaluation
 
 
 @router.post(
@@ -203,9 +279,85 @@ def _validate_dynamic_answer(task_id: str, answer: DynamicTrialAnswer, *, event_
         raise HTTPException(status_code=422, detail="请填写中途事件后的维持或调整决定及依据。")
 
 
+def _normalize_card_play(
+    task_id: str,
+    answer: DynamicTrialAnswer,
+    profile_store: ProfileStore,
+) -> None:
+    if not answer.card_play_rounds:
+        return
+
+    task = get_task_definition(task_id)
+    challenges = {challenge.id: challenge for challenge in task.ability_challenges}
+    round_ids = [item.challenge_id for item in answer.card_play_rounds]
+    if len(round_ids) != len(set(round_ids)):
+        raise HTTPException(status_code=422, detail="同一个能力应用挑战不能重复提交。")
+
+    normalized_rounds = []
+    selected_union: list[str] = []
+    for item in answer.card_play_rounds:
+        challenge = challenges.get(item.challenge_id)
+        if challenge is None:
+            raise HTTPException(status_code=422, detail="能力应用挑战不属于当前任务。")
+        selected_ids = list(dict.fromkeys(item.selected_card_ids))
+        if len(selected_ids) != len(item.selected_card_ids):
+            raise HTTPException(status_code=422, detail="同一挑战不能重复选择能力卡。")
+        cards = profile_store.get_cards_by_ids(selected_ids)
+        if len(cards) != len(selected_ids):
+            raise HTTPException(status_code=422, detail="能力出牌只能使用已确认的能力卡。")
+        cards_by_id = {card.id: card for card in cards}
+        ordered_cards = [cards_by_id[card_id] for card_id in selected_ids]
+        try:
+            normalized_rounds.append(
+                evaluate_card_play_round(challenge, ordered_cards)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        for card_id in selected_ids:
+            if card_id not in selected_union:
+                selected_union.append(card_id)
+
+    answer.card_play_rounds = normalized_rounds
+    answer.selected_card_ids = selected_union
+
+
+def _validate_card_play(
+    task_id: str,
+    answer: DynamicTrialAnswer,
+    profile_store: ProfileStore,
+) -> None:
+    if not answer.card_play_completed:
+        raise HTTPException(status_code=422, detail="请先完成能力出牌阶段。")
+
+    if answer.card_play_rounds:
+        task = get_task_definition(task_id)
+        expected_ids = {challenge.id for challenge in task.ability_challenges}
+        completed_ids = {item.challenge_id for item in answer.card_play_rounds}
+        if completed_ids != expected_ids or len(answer.card_play_rounds) != len(expected_ids):
+            raise HTTPException(status_code=422, detail="请先完成全部三个能力应用挑战。")
+        if any(item.match_level is None or not item.feedback for item in answer.card_play_rounds):
+            raise HTTPException(status_code=422, detail="能力应用挑战缺少匹配反馈。")
+        if len(profile_store.get_cards_by_ids(answer.selected_card_ids)) != len(
+            answer.selected_card_ids
+        ):
+            raise HTTPException(status_code=422, detail="能力出牌只能使用已确认的能力卡。")
+        return
+
+    selected_ids = list(dict.fromkeys(answer.selected_card_ids))
+    if not 1 <= len(selected_ids) <= 4 or len(selected_ids) != len(answer.selected_card_ids):
+        raise HTTPException(status_code=422, detail="能力出牌需要选择 1–4 张不同的已确认能力卡。")
+    if not answer.card_play_rationale.strip():
+        raise HTTPException(status_code=422, detail="请说明准备如何在任务中使用这些能力。")
+    if not answer.validation_hypothesis.strip():
+        raise HTTPException(status_code=422, detail="请填写本次任务准备验证的假设。")
+    if len(profile_store.get_cards_by_ids(selected_ids)) != len(selected_ids):
+        raise HTTPException(status_code=422, detail="能力出牌只能使用已确认的能力卡。")
+
+
 def _dynamic_observed_evidence(
     session: DynamicTrialSession,
     evaluation,
+    reflection: ReflectionProposal,
 ) -> ObservedEvidence:
     task = get_task_definition(session.task_id)
     return ObservedEvidence(
@@ -224,7 +376,71 @@ def _dynamic_observed_evidence(
         level_reason=evaluation.level_reason,
         confidence=evaluation.confidence,
         coach_dependency=evaluation.coach_dependency,
+        reflection=reflection,
     )
+
+
+async def _create_reflection(
+    task: A02Task | TrialTaskDefinition,
+    answer: A02Answer | DynamicTrialAnswer,
+    evaluation,
+    profile_store: ProfileStore,
+) -> ReflectionProposal:
+    cards = profile_store.get_profile().cards
+    previous_evidence = profile_store.get_evidence_records()
+    cache_key = ModelResponseCache.fingerprint(
+        {
+            "prompt_version": ReflectionAgent.PROMPT_VERSION,
+            "model": get_settings().qwen_model,
+            "task": task.model_dump(mode="json"),
+            "answer": (
+                _dynamic_answer_cache_payload(answer)
+                if isinstance(answer, DynamicTrialAnswer)
+                else answer.model_dump(mode="json")
+            ),
+            "evaluation": evaluation.model_dump(mode="json"),
+            "cards": [card.model_dump(mode="json") for card in cards],
+            "previous_evidence": [
+                record.model_dump(mode="json") for record in previous_evidence
+            ],
+        }
+    )
+    namespace = "trial-reflection"
+    lock = _model_call_locks.setdefault((namespace, cache_key), asyncio.Lock())
+    async with lock:
+        cached = _model_cache().get(namespace, cache_key)
+        if cached is not None:
+            try:
+                return ReflectionProposal.model_validate(cached)
+            except ValueError:
+                logger.warning("discarding invalid cached trial reflection")
+        try:
+            reflection = await _reflection_agent().reflect(
+                task,
+                answer,
+                evaluation,
+                cards,
+                previous_evidence,
+            )
+            _model_cache().set(
+                namespace,
+                cache_key,
+                reflection.model_dump(mode="json"),
+            )
+            return reflection
+        except (LLMGatewayError, ValueError) as exc:
+            logger.warning(
+                "reflection generation degraded task_id=%s reason=%s",
+                task.id,
+                exc,
+            )
+            return ReflectionAgent.fallback(
+                task,
+                answer,
+                evaluation,
+                cards,
+                previous_evidence,
+            )
 
 
 def _validate_answer(answer: A02Answer, *, event_revealed: bool) -> None:
@@ -270,7 +486,11 @@ def _validate_answer(answer: A02Answer, *, event_revealed: bool) -> None:
         raise HTTPException(status_code=422, detail="请说明中途事件如何改变或确认你的判断。")
 
 
-def _observed_evidence(session: TrialSession) -> ObservedEvidence:
+def _observed_evidence(
+    session: TrialSession,
+    evaluation,
+    reflection: ReflectionProposal,
+) -> ObservedEvidence:
     answer = session.answer
     return ObservedEvidence(
         task_id=session.task_id,
@@ -287,6 +507,12 @@ def _observed_evidence(session: TrialSession) -> ObservedEvidence:
             "这次任务只记录本次表现，不代表长期能力或岗位认证。",
             "运行指标和案例都是练习材料。",
         ],
+        primary_ability=evaluation.primary_ability,
+        observed_level=evaluation.observed_level,
+        level_reason=evaluation.level_reason,
+        confidence=evaluation.confidence,
+        coach_dependency=evaluation.coach_dependency,
+        reflection=reflection,
     )
 
 
@@ -329,19 +555,58 @@ def reveal_trial_event(session_id: str) -> TrialSession:
 
 @router.post("/sessions/{session_id}/submit", response_model=TrialSession)
 async def submit_trial_session(session_id: str) -> TrialSession:
-    session = _get_session(session_id)
-    if session.status == "submitted":
-        return session
-    _validate_answer(session.answer, event_revealed=session.event_revealed)
-    try:
-        evaluation = await _trial_agent().evaluate(A02_TASK, session.answer)
-        observed_evidence = _observed_evidence(session)
-        submitted = _trial_store().submit(session_id, observed_evidence, evaluation)
-        _profile_store().record_observed_evidence(session_id, observed_evidence, evaluation)
-        return submitted
-    except LLMGatewayError as exc:
-        logger.warning("trial evaluation failed session_id=%s reason=%s", session_id, exc)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ValueError as exc:
-        logger.warning("trial evaluation invalid session_id=%s reason=%s", session_id, exc)
-        raise HTTPException(status_code=502, detail="Qwen 评价未通过结构化校验，请稍后重试。") from exc
+    lock = _legacy_submission_locks.setdefault(session_id, asyncio.Lock())
+    async with lock:
+        session = _get_session(session_id)
+        if session.status == "submitted":
+            return session
+        _validate_answer(session.answer, event_revealed=session.event_revealed)
+        profile_store = _profile_store()
+        try:
+            evaluation = await _evaluate_legacy_cached(A02_TASK, session.answer)
+            reflection = await _create_reflection(
+                A02_TASK,
+                session.answer,
+                evaluation,
+                profile_store,
+            )
+            observed_evidence = _observed_evidence(session, evaluation, reflection)
+            submitted = _trial_store().submit(session_id, observed_evidence, evaluation)
+            profile_store.record_observed_evidence(session_id, observed_evidence, evaluation)
+            return submitted
+        except LLMGatewayError as exc:
+            logger.warning("trial evaluation failed session_id=%s reason=%s", session_id, exc)
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ValueError as exc:
+            logger.warning("trial evaluation invalid session_id=%s reason=%s", session_id, exc)
+            raise HTTPException(status_code=502, detail="Qwen 评价未通过结构化校验，请稍后重试。") from exc
+
+
+async def _evaluate_legacy_cached(
+    task: A02Task,
+    answer: A02Answer,
+) -> TrialEvaluation:
+    namespace = "legacy-trial-evaluation"
+    cache_key = ModelResponseCache.fingerprint(
+        {
+            "prompt_version": TrialAgent.PROMPT_VERSION,
+            "model": get_settings().qwen_model,
+            "task": task.model_dump(mode="json"),
+            "answer": answer.model_dump(mode="json"),
+        }
+    )
+    lock = _model_call_locks.setdefault((namespace, cache_key), asyncio.Lock())
+    async with lock:
+        cached = _model_cache().get(namespace, cache_key)
+        if cached is not None:
+            try:
+                return TrialEvaluation.model_validate(cached)
+            except ValueError:
+                logger.warning("discarding invalid cached legacy trial evaluation")
+        evaluation = await _trial_agent().evaluate(task, answer)
+        _model_cache().set(
+            namespace,
+            cache_key,
+            evaluation.model_dump(mode="json"),
+        )
+        return evaluation
