@@ -16,6 +16,39 @@ CardCategory = Literal[
 ]
 ClaimLevel = Literal["fact", "interpretation", "hypothesis"]
 EvidenceType = Literal["documented_fact", "self_report", "inference"]
+ExplorationFocus = Literal[
+    "ownership",
+    "decision",
+    "constraint",
+    "collaboration",
+    "result",
+    "transfer",
+    "evidence",
+]
+
+
+class ProfileConversationMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=1000)
+
+
+class ProfileExplorationRequest(BaseModel):
+    experience_text: str = Field(min_length=20, max_length=12000)
+    messages: list[ProfileConversationMessage] = Field(default_factory=list, max_length=12)
+    target_role: str | None = Field(default=None, max_length=120)
+    existing_card_titles: list[str] = Field(default_factory=list, max_length=20)
+    request_id: str | None = Field(default=None, min_length=8, max_length=100)
+
+
+class ProfileExplorationResponse(BaseModel):
+    trace_id: str
+    reply: str = Field(min_length=1, max_length=300)
+    focus_dimension: ExplorationFocus
+    evidence_found: list[str] = Field(default_factory=list, max_length=5)
+    evidence_gap: str = Field(min_length=1, max_length=300)
+    potential_hypotheses: list[str] = Field(default_factory=list, max_length=3)
+    ready_for_proposal: bool = False
+    notice: str = "潜能线索仅用于继续补充经历，确认前不会写入个人画像。"
 
 
 class ProfileProposalRequest(BaseModel):

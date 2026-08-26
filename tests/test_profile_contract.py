@@ -1,7 +1,7 @@
 import asyncio
 
 from app.agents.profile_agent import ProfileAgent
-from app.schemas.profile import ProfileProposalRequest
+from app.schemas.profile import ProfileExplorationRequest, ProfileProposalRequest
 
 
 class FakeGateway:
@@ -62,3 +62,52 @@ def test_profile_agent_downgrades_unverifiable_quote():
     assert card.claim_level == "hypothesis"
     assert card.evidence_type == "inference"
     assert card.evidence_quote == "模型未返回可逐字核对的原文片段"
+
+
+class ExplorationGateway:
+    def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
+        assert "不重复此前 assistant 已经给出的引导" in system_prompt
+        assert "校园项目" in user_prompt
+        assert "负责访谈" in user_prompt
+        return {
+            "reply": "补充你如何从访谈记录中确定优先解决的问题，以及放弃了哪些备选方向。",
+            "focus_dimension": "decision",
+            "evidence_found": ["用户明确负责访谈"],
+            "evidence_gap": "仍缺少方案取舍的判断依据。",
+            "potential_hypotheses": ["可能具备基于证据进行产品取舍的潜能，仍需验证。"],
+            "ready_for_proposal": False,
+        }
+
+
+def test_profile_agent_exploration_returns_one_evidence_bound_focus():
+    response = asyncio.run(ProfileAgent(ExplorationGateway()).explore(
+        ProfileExplorationRequest(
+            experience_text="我在校园项目中负责访谈用户并整理需求，随后和团队完成了产品原型。",
+            messages=[{"role": "user", "content": "我负责访谈，并整理了十五条反馈。"}],
+        ),
+        "trace-explore-1234",
+    ))
+
+    assert response.focus_dimension == "decision"
+    assert response.evidence_found == ["用户明确负责访谈"]
+    assert response.ready_for_proposal is False
+
+
+class QuestionExplorationGateway(ExplorationGateway):
+    def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
+        payload = super().generate_json(system_prompt, user_prompt)
+        payload["reply"] = "你具体做了什么？"
+        payload["focus_dimension"] = "unknown"
+        return payload
+
+
+def test_profile_agent_exploration_normalizes_invalid_prompt_shape():
+    response = asyncio.run(ProfileAgent(QuestionExplorationGateway()).explore(
+        ProfileExplorationRequest(
+            experience_text="我在校园项目中负责访谈用户并整理需求，随后和团队完成了产品原型。",
+        ),
+        "trace-explore-invalid",
+    ))
+
+    assert response.focus_dimension == "ownership"
+    assert "？" not in response.reply
