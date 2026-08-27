@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app.api import profile as profile_api
 from app.main import app
 from app.schemas.profile import CardProposal
+from app.schemas.profile import ProfileExplorationResponse
 from app.services.profile_store import ProfileStore
 from app.schemas.trial import ObservedEvidence, TrialEvaluation, TrialDimensionEvaluation
 
@@ -90,3 +91,41 @@ def test_profile_overview_returns_submitted_task_evidence(tmp_path, monkeypatch)
     assert overview.status_code == 200
     assert overview.json()["completed_task_ids"] == ["F-01"]
     assert overview.json()["evidence"][0]["evaluation"]["observed_level"] == "L3"
+
+
+class _FakeProfileExplorationAgent:
+    def __init__(self):
+        self.calls = 0
+
+    async def explore(self, request, trace_id):
+        self.calls += 1
+        return ProfileExplorationResponse(
+            trace_id=trace_id,
+            reply="补充你如何根据访谈内容确定第一版范围。",
+            focus_dimension="decision",
+            evidence_found=["负责用户访谈"],
+            evidence_gap="仍缺少范围取舍的判断依据。",
+            potential_hypotheses=["可能具备产品范围判断潜能，仍需验证。"],
+            ready_for_proposal=False,
+        )
+
+
+def test_profile_exploration_reuses_identical_model_result(tmp_path, monkeypatch):
+    store = ProfileStore(tmp_path / "profile.db")
+    agent = _FakeProfileExplorationAgent()
+    monkeypatch.setattr(profile_api, "_profile_store", lambda: store)
+    monkeypatch.setattr(profile_api, "_profile_agent", lambda: agent)
+    client = TestClient(app)
+    request = {
+        "experience_text": "我在校园项目中负责访谈用户并整理需求，随后和团队完成了产品原型。",
+        "messages": [{"role": "user", "content": "我负责访谈并整理了十五条反馈。"}],
+        "request_id": "request-explore-001",
+    }
+
+    first = client.post("/api/v1/profile/exploration/messages", json=request)
+    second = client.post("/api/v1/profile/exploration/messages", json=request)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    assert agent.calls == 1

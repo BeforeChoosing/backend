@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from pathlib import Path
 from uuid import uuid4
@@ -9,6 +10,8 @@ from app.config import get_settings
 from app.schemas.profile import (
     ConfirmProfileCardsRequest,
     MaterialExtractResponse,
+    ProfileExplorationRequest,
+    ProfileExplorationResponse,
     ProfileCardPatchRequest,
     ProfileCardsResponse,
     ProfileOverviewResponse,
@@ -17,15 +20,65 @@ from app.schemas.profile import (
 )
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
 from app.services.material_extractor import MaterialExtractionError, extract_material_text
+from app.services.model_response_cache import ModelResponseCache
 from app.services.profile_store import ProfileStore
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/profile", tags=["profile"])
 MAX_MATERIAL_BYTES = 20 * 1024 * 1024
+_exploration_locks: dict[str, asyncio.Lock] = {}
+_proposal_locks: dict[str, asyncio.Lock] = {}
 
 
 def _profile_store() -> ProfileStore:
     return ProfileStore(get_settings().profile_db_path)
+
+
+def _profile_agent() -> ProfileAgent:
+    return ProfileAgent(DashScopeQwenGateway(get_settings()))
+
+
+def _model_cache() -> ModelResponseCache:
+    return ModelResponseCache(_profile_store().db_path)
+
+
+@router.post("/exploration/messages", response_model=ProfileExplorationResponse)
+async def create_profile_exploration_message(
+    request: ProfileExplorationRequest,
+) -> ProfileExplorationResponse:
+    cache_key = ModelResponseCache.fingerprint(
+        {
+            "prompt_version": ProfileAgent.EXPLORATION_PROMPT_VERSION,
+            "model": get_settings().qwen_model,
+            "experience_text": request.experience_text,
+            "messages": [message.model_dump(mode="json") for message in request.messages],
+            "target_role": request.target_role,
+            "existing_card_titles": request.existing_card_titles,
+        }
+    )
+    lock = _exploration_locks.setdefault(cache_key, asyncio.Lock())
+    async with lock:
+        cached = _model_cache().get("profile-exploration", cache_key)
+        if cached is not None:
+            try:
+                return ProfileExplorationResponse.model_validate(cached)
+            except ValueError:
+                logger.warning("discarding invalid cached profile exploration")
+        trace_id = uuid4().hex
+        try:
+            response = await _profile_agent().explore(request, trace_id)
+            _model_cache().set(
+                "profile-exploration",
+                cache_key,
+                response.model_dump(mode="json"),
+            )
+            return response
+        except LLMGatewayError as exc:
+            logger.warning("profile exploration failed trace_id=%s reason=%s", trace_id, exc)
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except (ValueError, TypeError) as exc:
+            logger.warning("profile exploration invalid trace_id=%s reason=%s", trace_id, exc)
+            raise HTTPException(status_code=502, detail="本轮补充引导没有整理成功，请稍后重试。") from exc
 
 
 @router.post("/materials/extract", response_model=MaterialExtractResponse)
@@ -87,13 +140,33 @@ def delete_profile_card(card_id: str) -> ProfileCardsResponse:
 async def create_profile_proposal(
     request: ProfileProposalRequest,
 ) -> ProfileProposalResponse:
-    trace_id = uuid4().hex
-    agent = ProfileAgent(DashScopeQwenGateway(get_settings()))
-    try:
-        return await agent.propose(request, trace_id)
-    except LLMGatewayError as exc:
-        logger.warning("profile proposal failed trace_id=%s reason=%s", trace_id, exc)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except (ValueError, TypeError) as exc:
-        logger.warning("profile proposal invalid trace_id=%s reason=%s", trace_id, exc)
-        raise HTTPException(status_code=502, detail="模型输出未通过结构化校验，请稍后重试。") from exc
+    cache_key = ModelResponseCache.fingerprint(
+        {
+            "prompt_version": ProfileAgent.PROMPT_VERSION,
+            "model": get_settings().qwen_model,
+            "request": request.model_dump(mode="json"),
+        }
+    )
+    lock = _proposal_locks.setdefault(cache_key, asyncio.Lock())
+    async with lock:
+        cached = _model_cache().get("profile-proposal", cache_key)
+        if cached is not None:
+            try:
+                return ProfileProposalResponse.model_validate(cached)
+            except ValueError:
+                logger.warning("discarding invalid cached profile proposal")
+        trace_id = uuid4().hex
+        try:
+            response = await _profile_agent().propose(request, trace_id)
+            _model_cache().set(
+                "profile-proposal",
+                cache_key,
+                response.model_dump(mode="json"),
+            )
+            return response
+        except LLMGatewayError as exc:
+            logger.warning("profile proposal failed trace_id=%s reason=%s", trace_id, exc)
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except (ValueError, TypeError) as exc:
+            logger.warning("profile proposal invalid trace_id=%s reason=%s", trace_id, exc)
+            raise HTTPException(status_code=502, detail="模型输出未通过结构化校验，请稍后重试。") from exc

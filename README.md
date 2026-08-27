@@ -152,7 +152,11 @@ Windows PowerShell：
 python .\scripts\check_demo.py --live-qwen
 ```
 
-## 调用候选卡接口
+## 01 能力探索与候选卡
+
+`POST /api/v1/profile/exploration/messages` 使用当前经历草稿和最多 12 条补充对话生成一条聚焦引导。接口由 `ProfileAgent` 处理，只记录用户已经陈述的证据，把尚未证实的内容标记为潜能假设，不会直接写入个人画像。输入、历史记录、模型和提示词版本完全相同时复用本机缓存，不重复调用百炼。
+
+完成补充后调用候选卡接口：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
@@ -163,7 +167,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
   }'
 ```
 
-接口只返回候选证据卡，不会直接写入已确认画像。缺少 `DASHSCOPE_API_KEY`、网络不可用或 Qwen 输出无法通过结构化校验时，会返回明确错误，不生成伪造结果。
+候选卡接口同样会复用完全相同输入的有效模型结果。接口只返回候选证据卡，不会直接写入已确认画像。缺少 `DASHSCOPE_API_KEY`、网络不可用或 Qwen 输出无法通过结构化校验时，会返回明确错误，不生成伪造结果。
 
 ## 上传材料提取
 
