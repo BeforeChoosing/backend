@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import re
 import sys
 from pathlib import Path
@@ -47,6 +48,30 @@ def parse_args() -> argparse.Namespace:
         default="max",
         help="写入复核契约的推理强度，默认 max",
     )
+    parser.add_argument(
+        "--sol-sample-count",
+        type=int,
+        default=0,
+        help="从尚未复核案例中固定抽取多少条使用 gpt-5.6-sol/high",
+    )
+    parser.add_argument(
+        "--selection-seed",
+        type=int,
+        default=20260829,
+        help="复核模型抽样随机种子，默认 20260829",
+    )
+    parser.add_argument(
+        "--reviews-dir",
+        type=Path,
+        default=Path("datasets/trial_agent/v1/sol_review_results.local"),
+        help="已有逐案例复核结果目录，用于排除已完成案例",
+    )
+    parser.add_argument(
+        "--assignment-manifest",
+        type=Path,
+        default=Path("datasets/trial_agent/v1/review_assignments.local.json"),
+        help="固定保存每条案例的复核模型分配，避免续跑时重新抽样",
+    )
     return parser.parse_args()
 
 
@@ -56,6 +81,87 @@ def _rows_by_case(path: Path) -> dict[str, dict[str, Any]]:
 
 def _safe_name(case_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", case_id)
+
+
+def _completed_review_ids(path: Path) -> set[str]:
+    completed: set[str] = set()
+    if not path.exists():
+        return completed
+    for result in path.glob("*.json"):
+        try:
+            payload = json.loads(result.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        case_id = payload.get("case_id") if isinstance(payload, dict) else None
+        if isinstance(case_id, str) and case_id:
+            completed.add(case_id)
+    return completed
+
+
+def _review_assignments(
+    cases: list[TrialCaseInput],
+    *,
+    default_model: str,
+    default_reasoning_effort: str,
+    sol_sample_count: int,
+    selection_seed: int,
+    completed_case_ids: set[str],
+    manifest_path: Path,
+) -> dict[str, dict[str, str]]:
+    if manifest_path.exists():
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or not isinstance(payload.get("assignments"), dict):
+            raise ValueError(f"复核模型分配文件格式错误：{manifest_path}")
+        if payload.get("selection_seed") != selection_seed:
+            raise ValueError("已有复核模型分配文件的随机种子与当前参数不一致")
+        if payload.get("sol_sample_count") != sol_sample_count:
+            raise ValueError("已有复核模型分配文件的 Sol 抽样数量与当前参数不一致")
+        return {
+            str(case_id): {
+                "model": str(assignment["model"]),
+                "reasoning_effort": str(assignment["reasoning_effort"]),
+            }
+            for case_id, assignment in payload["assignments"].items()
+            if isinstance(assignment, dict)
+            and assignment.get("model")
+            and assignment.get("reasoning_effort")
+        }
+
+    candidate_ids = sorted(
+        case.case_id for case in cases if case.case_id not in completed_case_ids
+    )
+    if sol_sample_count < 0 or sol_sample_count > len(candidate_ids):
+        raise ValueError(
+            f"Sol 抽样数量必须在 0 到 {len(candidate_ids)} 之间，当前为 {sol_sample_count}"
+        )
+    sol_case_ids = set(random.Random(selection_seed).sample(candidate_ids, sol_sample_count))
+    assignments = {
+        case.case_id: {
+            "model": "gpt-5.6-sol" if case.case_id in sol_case_ids else default_model,
+            "reasoning_effort": "high"
+            if case.case_id in sol_case_ids
+            else default_reasoning_effort,
+        }
+        for case in cases
+    }
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "version": "pair-review-assignment-v1",
+                "selection_seed": selection_seed,
+                "sol_sample_count": sol_sample_count,
+                "sol_case_ids": sorted(sol_case_ids),
+                "assignments": assignments,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return assignments
 
 
 def _packet(
@@ -132,6 +238,19 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 2
     selected = cases if args.limit is None else cases[: args.limit]
+    try:
+        assignments = _review_assignments(
+            selected,
+            default_model=args.review_model,
+            default_reasoning_effort=args.reasoning_effort,
+            sol_sample_count=args.sol_sample_count,
+            selection_seed=args.selection_seed,
+            completed_case_ids=_completed_review_ids(args.reviews_dir),
+            manifest_path=args.assignment_manifest,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     args.output_dir.mkdir(parents=True, exist_ok=True)
     written = 0
     skipped = 0
@@ -145,14 +264,18 @@ def main() -> int:
         destination = args.output_dir / f"{_safe_name(case.case_id)}.json"
         if args.resume and destination.exists():
             continue
+        assignment = assignments.get(
+            case.case_id,
+            {"model": args.review_model, "reasoning_effort": args.reasoning_effort},
+        )
         destination.write_text(
             json.dumps(
                 _packet(
                     case,
                     baseline,
                     teacher,
-                    review_model=args.review_model,
-                    reasoning_effort=args.reasoning_effort,
+                    review_model=assignment["model"],
+                    reasoning_effort=assignment["reasoning_effort"],
                 ),
                 ensure_ascii=False,
                 indent=2,
@@ -162,6 +285,15 @@ def main() -> int:
         )
         written += 1
     print(f"packet：{written}，跳过：{skipped}，目录：{args.output_dir}")
+    sol_case_ids = sorted(
+        case_id
+        for case_id, assignment in assignments.items()
+        if assignment["model"] == "gpt-5.6-sol"
+        and assignment["reasoning_effort"] == "high"
+        and case_id not in _completed_review_ids(args.reviews_dir)
+    )
+    if sol_case_ids:
+        print(f"Sol/high 固定抽样：{len(sol_case_ids)} 条：{','.join(sol_case_ids)}")
     return 0 if skipped == 0 else 1
 
 

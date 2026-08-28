@@ -9,6 +9,7 @@ from app.training.export import export_dpo_records, export_sft_records
 from app.training.generation import CaseGenerator
 from app.training.teacher import TeacherCache, TeacherLabeler
 from app.training.validation import validate_evaluation
+from scripts.prepare_sol_pair_packets import _review_assignments
 
 
 def _case(task_id: str = "M-02", case_id: str = "case-001") -> TrialCaseInput:
@@ -268,3 +269,37 @@ def test_export_requires_review_for_needs_review_and_never_fabricates_dpo() -> N
     assert len(dpo_records) == 1
     assert dpo_counts["accepted"] == 1
     assert dpo_records[0]["metadata"]["format"] == "dpo-chatml-v1"
+
+
+def test_review_assignments_sample_sol_once_and_reuse_manifest(tmp_path: Path) -> None:
+    cases = [_case(case_id=f"case-{index:03d}") for index in range(8)]
+    manifest = tmp_path / "review-assignments.json"
+
+    first = _review_assignments(
+        cases,
+        default_model="gpt-5.6-luna",
+        default_reasoning_effort="max",
+        sol_sample_count=2,
+        selection_seed=20260829,
+        completed_case_ids={"case-000"},
+        manifest_path=manifest,
+    )
+    sol_ids = {
+        case_id
+        for case_id, assignment in first.items()
+        if assignment == {"model": "gpt-5.6-sol", "reasoning_effort": "high"}
+    }
+
+    assert len(sol_ids) == 2
+    assert "case-000" not in sol_ids
+
+    second = _review_assignments(
+        cases,
+        default_model="unused-after-manifest",
+        default_reasoning_effort="unused",
+        sol_sample_count=2,
+        selection_seed=20260829,
+        completed_case_ids=set(),
+        manifest_path=manifest,
+    )
+    assert second == first

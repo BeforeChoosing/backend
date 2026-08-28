@@ -355,7 +355,7 @@ python scripts/prepare_sol_pair_packets.py \
   --cases datasets/trial_agent/v1/case_inputs.local.jsonl \
   --teacher datasets/trial_agent/v1/teacher_labels.generated.local.jsonl \
   --baseline datasets/trial_agent/v1/baseline_labels.local.jsonl \
-  --resume
+  --sol-sample-count 7 --selection-seed 20260829
 ```
 
 Windows PowerShell：
@@ -370,11 +370,13 @@ python .\scripts\prepare_sol_pair_packets.py `
   --cases .\datasets\trial_agent\v1\case_inputs.local.jsonl `
   --teacher .\datasets\trial_agent\v1\teacher_labels.generated.local.jsonl `
   --baseline .\datasets\trial_agent\v1\baseline_labels.local.jsonl `
-  --resume
+  --sol-sample-count 7 --selection-seed 20260829
 ```
 
 每个 packet 对应一条案例的 baseline/teacher 评价对。将剩余 packet 分别交给一个独立的
-`gpt-5.6-luna`、`max` 推理强度子任务，结果写入同名的
+复核子任务；固定随机抽取 7 条使用 `gpt-5.6-sol / high`，其余使用
+`gpt-5.6-luna / max`。抽样结果保存在 `review_assignments.local.json`，续跑不会重新分配。
+结果写入同名的
 `datasets/trial_agent/v1/sol_review_results.local/` 文件，不能修改 packet。结果必须包含
 `case_id`、`pair_valid`、`chosen_source`、`rejected_source`、`enhanced_evaluation`、`rationale`、
 `review_model` 和 `reasoning_effort`；
