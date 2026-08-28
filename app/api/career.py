@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.agents.career_agent import CareerAgent
 from app.config import get_settings
+from app.knowledge.hybrid import HybridKnowledgeRetriever
 from app.knowledge.retriever import KnowledgeRetriever
 from app.schemas.career import CareerRecommendation, CareerRecommendationRequest
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
@@ -24,9 +25,15 @@ def _profile_store() -> ProfileStore:
 
 
 @lru_cache(maxsize=1)
-def _knowledge_retriever() -> KnowledgeRetriever:
+def _knowledge_retriever() -> KnowledgeRetriever | HybridKnowledgeRetriever:
     settings = get_settings()
-    return KnowledgeRetriever(settings.knowledge_dir, settings.knowledge_db_path)
+    if settings.rag_retriever_mode.lower() == "fts":
+        return KnowledgeRetriever(settings.knowledge_dir, settings.knowledge_db_path)
+    return HybridKnowledgeRetriever(
+        settings.knowledge_dir,
+        settings.knowledge_db_path,
+        settings=settings,
+    )
 
 
 def _career_agent() -> CareerAgent:

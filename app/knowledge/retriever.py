@@ -77,6 +77,7 @@ class KnowledgeRetriever:
                 DROP TABLE IF EXISTS knowledge_chunks_fts;
                 DROP TABLE IF EXISTS knowledge_chunks;
                 DROP TABLE IF EXISTS knowledge_documents;
+                DROP TABLE IF EXISTS knowledge_embeddings;
                 DROP TABLE IF EXISTS knowledge_meta;
 
                 CREATE TABLE knowledge_meta (
@@ -187,6 +188,62 @@ class KnowledgeRetriever:
             ).fetchone()
         return int(row["value"]) if row else 0
 
+    @property
+    def source_fingerprint(self) -> str:
+        """Return the fingerprint of the Markdown source used to build the index."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT value FROM knowledge_meta WHERE key = 'source_fingerprint'"
+            ).fetchone()
+        return str(row["value"]) if row else ""
+
+    def list_chunks(
+        self,
+        *,
+        corpus: str | None = None,
+        document_id: str | None = None,
+    ) -> list[KnowledgeChunk]:
+        """Materialize active chunks for local vector indexing or evaluation."""
+        filters = ["c.status = 'active'"]
+        params: list[str] = []
+        if corpus:
+            filters.append("c.corpus = ?")
+            params.append(corpus)
+        if document_id:
+            filters.append("c.document_id = ?")
+            params.append(document_id)
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT c.*, d.title AS document_title, d.source_note
+                FROM knowledge_chunks c
+                JOIN knowledge_documents d ON d.document_id = c.document_id
+                WHERE {' AND '.join(filters)}
+                ORDER BY c.document_id, c.chunk_index, c.id
+                """,
+                params,
+            ).fetchall()
+        return [self._row_to_chunk(row) for row in rows]
+
+    def get_chunks_by_ids(self, chunk_ids: list[str]) -> list[KnowledgeChunk]:
+        """Return active chunks in the same order as the supplied IDs."""
+        if not chunk_ids:
+            return []
+        unique_ids = list(dict.fromkeys(chunk_ids))
+        placeholders = ",".join("?" for _ in unique_ids)
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT c.*, d.title AS document_title, d.source_note
+                FROM knowledge_chunks c
+                JOIN knowledge_documents d ON d.document_id = c.document_id
+                WHERE c.status = 'active' AND c.id IN ({placeholders})
+                """,
+                unique_ids,
+            ).fetchall()
+        by_id = {row["id"]: self._row_to_chunk(row) for row in rows}
+        return [by_id[chunk_id] for chunk_id in unique_ids if chunk_id in by_id]
+
     def search(
         self,
         query: str,
@@ -229,21 +286,25 @@ class KnowledgeRetriever:
                 continue
             score = _score_terms(query, terms, matched, haystack)
             scored.append(
-                KnowledgeChunk(
-                    id=row["id"],
-                    document_id=row["document_id"],
-                    document_title=row["document_title"],
-                    corpus=row["corpus"],
-                    content=row["content"],
-                    heading_path=tuple(json.loads(row["heading_path"])),
-                    source_locator=row["source_locator"],
-                    trust_level=row["trust_level"],
-                    source_note=row["source_note"],
-                    score=score,
-                )
+                self._row_to_chunk(row, score=score)
             )
         scored.sort(key=lambda chunk: (-chunk.score, chunk.id))
-        return scored[: max(1, min(limit, 10))]
+        return scored[: max(1, min(limit, 100))]
+
+    @staticmethod
+    def _row_to_chunk(row: sqlite3.Row, *, score: float = 0.0) -> KnowledgeChunk:
+        return KnowledgeChunk(
+            id=row["id"],
+            document_id=row["document_id"],
+            document_title=row["document_title"],
+            corpus=row["corpus"],
+            content=row["content"],
+            heading_path=tuple(json.loads(row["heading_path"])),
+            source_locator=row["source_locator"],
+            trust_level=row["trust_level"],
+            source_note=row["source_note"],
+            score=score,
+        )
 
     def _ensure_index(self) -> None:
         documents = sorted(self.source_dir.rglob("*.md"))

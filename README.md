@@ -7,6 +7,7 @@
 ```
 
 后端使用 Conda 管理 Python 环境，当前提供 FastAPI API、Qwen 网关、四个独立 Agent 和本地岗位知识库检索。
+岗位 RAG 采用本地 Markdown、SQLite FTS5、SQLite 向量表和百炼检索模型组合：资料与向量索引留在本机，百炼只接收必要的文本请求，不使用托管知识库或本地下载模型。
 
 四个 Agent 的职责和写入边界如下：
 
@@ -50,8 +51,19 @@ Copy-Item .env.example .env
 DASHSCOPE_API_KEY=你的百炼密钥
 QWEN_MODEL=qwen-plus
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+BAILIAN_EMBEDDING_URL=https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding
+BAILIAN_EMBEDDING_MODEL=qwen3.7-text-embedding
+BAILIAN_EMBEDDING_DIMENSION=1024
+BAILIAN_EMBEDDING_BATCH_SIZE=20
+BAILIAN_RERANK_URL=https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
+BAILIAN_RERANK_MODEL=qwen3-rerank
+RAG_RETRIEVER_MODE=hybrid
+RAG_CANDIDATE_LIMIT=20
+RAG_RERANK_LIMIT=5
 LLM_REQUEST_TIMEOUT=45
 PROFILE_DB_PATH=profile.db
+KNOWLEDGE_DIR=knowledge/public
+KNOWLEDGE_DB_PATH=knowledge.db
 CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ```
 
@@ -112,7 +124,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/health
 
 ## 一键验收
 
-先启动前端和后端，再在后端仓库根目录执行验收脚本。默认检查环境变量、百炼地址、本地 RAG、12 个固定任务、四个 Agent，以及前后端连通性；默认不会调用 Qwen，不产生模型费用。
+先启动前端和后端，再在后端仓库根目录执行验收脚本。默认检查环境变量、百炼地址、本地 RAG、12 个固定任务、四个 Agent，以及前后端连通性；默认不会调用任何模型，不产生模型费用。
 
 macOS/Linux：
 
@@ -150,6 +162,18 @@ Windows PowerShell：
 
 ```powershell
 python .\scripts\check_demo.py --live-qwen
+```
+
+需要确认本地向量检索和重排链路时，显式增加 `--live-rag`。该参数只执行 1 次查询向量和 1 次重排调用，并要求已经建立本地向量索引：
+
+```bash
+python scripts/check_demo.py --live-rag
+```
+
+Windows PowerShell：
+
+```powershell
+python .\scripts\check_demo.py --live-rag
 ```
 
 ## 01 能力探索与候选卡
@@ -203,21 +227,53 @@ Qwen 只评价固定任务中的可观察行为。接口返回各 Rubric 的分�
 
 ## 本地岗位 RAG 与职业推演
 
-职业探索页只读取已确认能力卡。后端将能力卡内容与本地岗位资料组合成检索词，在 SQLite FTS5 索引中检索 AI 产品经理岗位片段，再把检索片段和引用 ID 交给 Qwen 生成结构化推演。前端不会直接请求百炼，也不会接触 API Key。
+职业探索页只读取已确认能力卡。后端将能力卡内容与本地岗位资料组合成检索词，先用 SQLite FTS5 召回，再用百炼 `qwen3.7-text-embedding` 生成查询向量，在本地 SQLite 向量表中做余弦检索，最后用百炼 `qwen3-rerank` 对候选片段重排，再把带引用 ID 的片段交给 Qwen 生成结构化推演。前端不会直接请求百炼，也不会接触 API Key。
+
+模型选择依据：岗位资料是文本，使用 `qwen3.7-text-embedding`，避免引入视觉模型或本地模型文件；重排使用同属 Qwen 系列的 `qwen3-rerank`，保持与比赛技术基础一致。若当前百炼工作空间仍提供 `gte-rerank-v2`，可将 `BAILIAN_RERANK_MODEL` 改为该值，接口协议不变。
 
 知识库资料来自项目提供的 `公共RAG知识库` 解压内容，已按文档登记 `document_id`、资料级别和来源说明。当前岗位文档属于公开资料交叉归纳稿，原始 JD 链接尚待补齐，因此界面会显示资料级别和来源提示，不将归纳稿当作官方岗位结论。
 
-首次安装或更新 Markdown 资料后，在后端仓库根目录执行索引构建：
+首次安装或更新 Markdown 资料后，先建立本地 FTS5 索引：
 
 ```bash
 conda run -n before-choosing-demo python -m app.knowledge.indexer
 ```
 
-Windows PowerShell 使用同一条命令。服务启动时也会检查文件指纹并自动建立缺失索引。
+Windows PowerShell 使用同一条命令。服务启动时会检查文件指纹并自动建立缺失的 FTS5 索引。
+
+然后使用百炼 Embedding 建立本地向量索引。该步骤首次会按批次调用 Embedding API，之后按资料指纹、模型、维度和内容摘要复用已有向量，不会重复生成未变化的片段：
+
+```bash
+conda run -n before-choosing-demo python scripts/build_vector_index.py
+```
+
+Windows PowerShell：
+
+```powershell
+conda run -n before-choosing-demo python .\scripts\build_vector_index.py
+```
+
+向量索引写入 `KNOWLEDGE_DB_PATH` 指定的本机 SQLite 文件，未建立向量索引时系统仍可使用 FTS5；远端 Embedding 或 Rerank 暂时不可用时，职业推演会保留确定性的本地检索结果。
 
 职业推演接口：
 
 - `POST /api/v1/career/recommendations`：提交 1–4 个已确认能力卡 ID，返回 AI 产品经理路径摘要、支持性判断、未知项、动态选择的下一任务和本地引用片段。
+
+### 检索精度对比
+
+仓库内置小型标注集 `scripts/rag_eval_cases.json`，以资料章节为目标，比较改造前 FTS5 与改造后 Embedding + Rerank 的 `Hit@5` 和 `MRR@5`。默认只运行 FTS5，不调用模型：
+
+```bash
+conda run -n before-choosing-demo python scripts/evaluate_rag.py
+```
+
+向量索引建立完成且需要真实对比时，显式增加 `--live`。评测集每条查询只调用必要的查询向量和重排，不会重新生成文档向量：
+
+```bash
+conda run -n before-choosing-demo python scripts/evaluate_rag.py --live
+```
+
+评测集规模较小，用于本地回归和方向性比较；正式材料中的结论应同时记录资料版本、模型版本和调用日期。
 
 ## 本地画像持久化
 

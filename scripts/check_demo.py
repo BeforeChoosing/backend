@@ -21,8 +21,14 @@ from app.agents.profile_agent import ProfileAgent  # noqa: E402
 from app.agents.reflection_agent import ReflectionAgent  # noqa: E402
 from app.agents.trial_agent import TrialAgent  # noqa: E402
 from app.config import Settings, get_settings  # noqa: E402
+from app.knowledge.hybrid import HybridKnowledgeRetriever  # noqa: E402
 from app.knowledge.retriever import KnowledgeRetriever  # noqa: E402
+from app.knowledge.vector_index import LocalVectorIndex  # noqa: E402
 from app.services.llm_gateway import DashScopeQwenGateway  # noqa: E402
+from app.services.bailian_retrieval import (  # noqa: E402
+    DashScopeEmbeddingGateway,
+    DashScopeRerankGateway,
+)
 from app.tasks.catalog import list_task_definitions  # noqa: E402
 
 
@@ -39,6 +45,10 @@ def check_configuration(settings: Settings) -> CheckResult:
         missing.append("DASHSCOPE_API_KEY")
     if not settings.qwen_model.strip():
         missing.append("QWEN_MODEL")
+    if not settings.bailian_embedding_model.strip():
+        missing.append("BAILIAN_EMBEDDING_MODEL")
+    if not settings.bailian_rerank_model.strip():
+        missing.append("BAILIAN_RERANK_MODEL")
 
     parsed = urlparse(settings.dashscope_base_url)
     valid_url = (
@@ -55,7 +65,8 @@ def check_configuration(settings: Settings) -> CheckResult:
     return CheckResult(
         "环境配置",
         True,
-        f"模型 {settings.qwen_model}；百炼地址格式有效；密钥已配置",
+        f"Qwen {settings.qwen_model}；Embedding {settings.bailian_embedding_model}；"
+        f"Rerank {settings.bailian_rerank_model}；密钥已配置",
     )
 
 
@@ -71,10 +82,16 @@ def check_knowledge(settings: Settings) -> CheckResult:
         return CheckResult("本地 RAG", False, str(exc))
     if retriever.chunk_count <= 0 or not results:
         return CheckResult("本地 RAG", False, "索引中没有可检索的岗位片段")
+    vector_index = LocalVectorIndex(settings.knowledge_db_path)
+    vector_detail = (
+        f"本地向量 {vector_index.count} 条"
+        if vector_index.ready
+        else "本地向量尚未建立（可运行 scripts/build_vector_index.py）"
+    )
     return CheckResult(
         "本地 RAG",
         True,
-        f"已索引 {retriever.chunk_count} 个片段，本次检索返回 {len(results)} 条",
+        f"FTS5 已索引 {retriever.chunk_count} 个片段，本次返回 {len(results)} 条；{vector_detail}",
     )
 
 
@@ -137,6 +154,41 @@ def check_live_qwen(settings: Settings) -> CheckResult:
     return CheckResult("百炼真实调用", True, "已完成 1 次 Qwen JSON 连通性调用")
 
 
+def check_live_rag(settings: Settings) -> CheckResult:
+    """Run one meaningful local-RAG query: one query embedding + one rerank."""
+    try:
+        index = LocalVectorIndex(settings.knowledge_db_path)
+        if not index.ready:
+            return CheckResult(
+                "百炼 RAG 真实调用",
+                False,
+                "本地向量索引为空，请先运行 scripts/build_vector_index.py",
+            )
+        retriever = HybridKnowledgeRetriever(
+            settings.knowledge_dir,
+            settings.knowledge_db_path,
+            settings=settings,
+            embedding_gateway=DashScopeEmbeddingGateway(settings),
+            rerank_gateway=DashScopeRerankGateway(settings),
+        )
+        results = retriever.search(
+            "AI 产品经理如何验证用户需求并推动技术落地",
+            corpus="career",
+            document_id="job-ai-product-manager-v1",
+            limit=3,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface live diagnostics in CLI
+        return CheckResult("百炼 RAG 真实调用", False, str(exc))
+    if not results:
+        return CheckResult("百炼 RAG 真实调用", False, "真实检索未返回岗位片段")
+    return CheckResult(
+        "百炼 RAG 真实调用",
+        True,
+        f"已完成 1 次 Embedding 查询和 1 次 {settings.bailian_rerank_model} 重排，"
+        f"返回 {len(results)} 条（{retriever.last_diagnostics.get('mode', 'unknown')}）",
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="检查本机 Demo 的配置与完整链路")
     parser.add_argument(
@@ -159,6 +211,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="额外执行 1 次会产生费用的 Qwen 连通性调用",
     )
+    parser.add_argument(
+        "--live-rag",
+        action="store_true",
+        help="额外执行 1 次 Embedding 查询和 1 次 Rerank，会产生少量费用",
+    )
     return parser.parse_args()
 
 
@@ -180,6 +237,8 @@ def main() -> int:
         )
     if args.live_qwen:
         results.append(check_live_qwen(settings))
+    if args.live_rag:
+        results.append(check_live_rag(settings))
 
     for result in results:
         marker = "通过" if result.ok else "失败"

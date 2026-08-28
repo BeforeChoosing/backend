@@ -1,0 +1,34 @@
+[
+  {
+    "query": "AI 产品经理需要哪些传统产品能力",
+    "expected_heading": "传统PM基本功"
+  },
+  {
+    "query": "大模型产品经理需要掌握 RAG、Agent 和模型评测吗",
+    "expected_heading": "AI技术素养"
+  },
+  {
+    "query": "AI 产品从 0 到 1 上线需要什么落地能力",
+    "expected_heading": "落地交付力"
+  },
+  {
+    "query": "AI 产品经理需要哪些软性素质",
+    "expected_heading": "软性素质"
+  },
+  {
+    "query": "校招 AI 产品经理应该怎样准备",
+    "expected_heading": "给大学生的对照指南"
+  },
+  {
+    "query": "AI 产品经理的典型工作有哪些",
+    "expected_heading": "典型工作"
+  },
+  {
+    "query": "不同岗位层级对 AI 产品经理的技术要求",
+    "expected_heading": "按岗位层级的能力侧重"
+  },
+  {
+    "query": "Prompt 工程和 Agent 工作流的发展趋势",
+    "expected_heading": "关键趋势"
+  }
+]

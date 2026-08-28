@@ -48,6 +48,9 @@ artifacts/
 outputs/
 runs/
 checkpoints/
+.rag/
+vector-cache/
+evaluation-results/
 *.sqlite
 *.sqlite3
 *.db
