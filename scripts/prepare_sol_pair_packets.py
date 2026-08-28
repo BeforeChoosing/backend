@@ -1,6 +1,6 @@
 """Prepare one review packet per baseline/teacher evaluation pair.
 
-The packet is the hand-off boundary for a ``gpt-5.6-sol/high`` review task.
+The packet is the hand-off boundary for one independent model review task.
 It contains one case, the deterministic evidence catalog, and the two Qwen
 evaluations that must be compared.  The reviewer writes a separate JSON file;
 the packet itself is never modified in place.
@@ -25,7 +25,7 @@ from app.training.export import read_jsonl  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="为 Sol 评价子任务准备逐案例对比包")
+    parser = argparse.ArgumentParser(description="为独立评价子任务准备逐案例对比包")
     parser.add_argument("--cases", required=True, type=Path, help="案例输入 JSONL")
     parser.add_argument("--teacher", required=True, type=Path, help="强化版 Qwen 评价 JSONL")
     parser.add_argument("--baseline", required=True, type=Path, help="基础版 Qwen 评价 JSONL")
@@ -37,6 +37,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--resume", action="store_true", help="跳过已有 packet")
     parser.add_argument("--limit", type=int, help="最多准备多少个 packet")
+    parser.add_argument(
+        "--review-model",
+        default="gpt-5.6-luna",
+        help="写入复核契约的模型，默认 gpt-5.6-luna",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        default="max",
+        help="写入复核契约的推理强度，默认 max",
+    )
     return parser.parse_args()
 
 
@@ -48,10 +58,17 @@ def _safe_name(case_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", case_id)
 
 
-def _packet(case: TrialCaseInput, baseline: dict[str, Any], teacher: dict[str, Any]) -> dict[str, Any]:
+def _packet(
+    case: TrialCaseInput,
+    baseline: dict[str, Any],
+    teacher: dict[str, Any],
+    *,
+    review_model: str,
+    reasoning_effort: str,
+) -> dict[str, Any]:
     task = get_task_definition(case.task_id)
     return {
-        "packet_version": "sol-pair-v1",
+        "packet_version": "pair-review-v2",
         "pair_id": f"eval-pair-{case.case_id}",
         "case_id": case.case_id,
         "task_id": case.task_id,
@@ -79,8 +96,8 @@ def _packet(case: TrialCaseInput, baseline: dict[str, Any], teacher: dict[str, A
             "teacher": teacher.get("teacher"),
         },
         "review_contract": {
-            "model": "gpt-5.6-sol",
-            "reasoning_effort": "high",
+            "model": review_model,
+            "reasoning_effort": reasoning_effort,
             "instruction": (
                 "只评价这一个 baseline/teacher 对比对。先检查两份评价是否忠实引用 case 中的答案和证据目录，"
                 "再输出一份结构合法的 enhanced_evaluation。明确选择 chosen_source 和 rejected_source；"
@@ -95,6 +112,8 @@ def _packet(case: TrialCaseInput, baseline: dict[str, Any], teacher: dict[str, A
                 "enhanced_evaluation": "TrialEvaluation JSON；不能引用不存在的证据",
                 "rationale": "说明质量差异、证据依据和排除原因",
                 "issues": ["可选的问题代码"],
+                "review_model": review_model,
+                "reasoning_effort": reasoning_effort,
             },
         },
     }
@@ -127,7 +146,18 @@ def main() -> int:
         if args.resume and destination.exists():
             continue
         destination.write_text(
-            json.dumps(_packet(case, baseline, teacher), ensure_ascii=False, indent=2) + "\n",
+            json.dumps(
+                _packet(
+                    case,
+                    baseline,
+                    teacher,
+                    review_model=args.review_model,
+                    reasoning_effort=args.reasoning_effort,
+                ),
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
             encoding="utf-8",
         )
         written += 1

@@ -342,7 +342,7 @@ python .\scripts\build_trial_teacher_labels.py `
 
 `--dry-run` 不会写入伪造评价；正式运行会写入本地 `teacher_labels.local.jsonl`，并保留每条校验状态、证据覆盖率、原因码、模型和请求指纹。`silver_auto` 是可进入候选 SFT 的自动通过记录，`needs_review` 必须由人工抽检并在元数据中标记 `human_reviewed=true`。
 
-3. 生成基础评价并准备 Sol 对比包。基础评价使用 `TrialAgent.BASE_SYSTEM_PROMPT`，只作为 DPO
+3. 生成基础评价并准备逐案例对比包。基础评价使用 `TrialAgent.BASE_SYSTEM_PROMPT`，只作为 DPO
    的候选拒答；强化评价使用上一步的 `qwen3-vl-plus` 结果。两种评价分别缓存，单条案例最多各调用一次：
 
 ```bash
@@ -373,10 +373,11 @@ python .\scripts\prepare_sol_pair_packets.py `
   --resume
 ```
 
-每个 packet 对应一条案例的 baseline/teacher 评价对。将 packet 交给一个独立的
-`gpt-5.6-sol`、高推理强度子任务，结果写入同名的
+每个 packet 对应一条案例的 baseline/teacher 评价对。将剩余 packet 分别交给一个独立的
+`gpt-5.6-luna`、`max` 推理强度子任务，结果写入同名的
 `datasets/trial_agent/v1/sol_review_results.local/` 文件，不能修改 packet。结果必须包含
-`case_id`、`pair_valid`、`chosen_source`、`rejected_source`、`enhanced_evaluation`、`rationale`；
+`case_id`、`pair_valid`、`chosen_source`、`rejected_source`、`enhanced_evaluation`、`rationale`、
+`review_model` 和 `reasoning_effort`；
 `enhanced_evaluation` 只能引用该 packet 的证据目录。每个 DPO 对只使用一个子任务复核，不能把
 一个子任务的结论批量套用到其他案例。
 
@@ -390,7 +391,7 @@ python scripts/finalize_sol_pair_reviews.py \
   --reviews-dir datasets/trial_agent/v1/sol_review_results.local
 ```
 
-只有证据引用有效、chosen/rejected 有真实差异且 Sol 明确判定 `pair_valid=true` 的记录会进入
+只有证据引用有效、chosen/rejected 有真实差异且独立复核明确判定 `pair_valid=true` 的记录会进入
 `sol_dpo_pairs.local.jsonl`；其余记录保留在 `sol_pair_reviews.local.jsonl` 供人工抽检，不会被
 静默转成负样本。目标数据量为 120 条案例和尽可能多的有效对，实际 DPO 数量以校验结果为准。
 

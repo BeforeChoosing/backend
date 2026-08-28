@@ -1,4 +1,4 @@
-"""Validate Sol pair reviews and emit explicit DPO pair candidates.
+"""Validate independent pair reviews and emit explicit DPO candidates.
 
 This command is deliberately offline.  It accepts only reviewer files written
 for an existing packet, validates every evidence reference against that case,
@@ -27,7 +27,7 @@ from app.tasks.catalog import get_task_definition  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="校验 Sol 对比结果并生成 DPO pair")
+    parser = argparse.ArgumentParser(description="校验逐案例对比结果并生成 DPO pair")
     parser.add_argument("--cases", required=True, type=Path, help="案例输入 JSONL")
     parser.add_argument("--teacher", required=True, type=Path, help="强化版评价 JSONL")
     parser.add_argument("--baseline", required=True, type=Path, help="基础版评价 JSONL")
@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
         "--reviews-dir",
         required=True,
         type=Path,
-        help="Sol 子任务逐案例结果目录",
+        help="独立复核子任务逐案例结果目录",
     )
     parser.add_argument(
         "--review-output",
@@ -153,6 +153,8 @@ def main() -> int:
             else None
         )
         pair_valid = bool(review.get("pair_valid"))
+        review_model = str(review.get("review_model") or "gpt-5.6-sol")
+        reasoning_effort = str(review.get("reasoning_effort") or "high")
         if (
             not pair_valid
             or chosen is None
@@ -178,8 +180,8 @@ def main() -> int:
             "issues": review.get("issues") if isinstance(review.get("issues"), list) else [],
             "chosen_validation": chosen_validation.as_dict() if chosen_validation else None,
             "rejected_validation": rejected_validation.as_dict() if rejected_validation else None,
-            "review_model": "gpt-5.6-sol",
-            "reasoning_effort": "high",
+            "review_model": review_model,
+            "reasoning_effort": reasoning_effort,
         }
         review_rows.append(review_row)
         if pair_valid and chosen is not None and rejected is not None:
@@ -191,9 +193,9 @@ def main() -> int:
                     **dict(case.metadata),
                     "source": "sol_pair_review",
                     "human_review_required": True,
-                    "sol_review_model": "gpt-5.6-sol",
-                    "sol_review_reasoning": "high",
-                    "sol_rationale": str(review.get("rationale") or ""),
+                    "pair_review_model": review_model,
+                    "pair_review_reasoning": reasoning_effort,
+                    "pair_review_rationale": str(review.get("rationale") or ""),
                     "chosen_source": chosen_source,
                     "rejected_source": rejected_source,
                 },
