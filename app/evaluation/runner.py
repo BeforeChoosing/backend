@@ -165,7 +165,14 @@ async def run_live_evaluation(
     settings = settings or get_settings()
     cases = load_evaluation_cases(cases_path)
     grouped: dict[str, list] = {}
+    skipped_arms: list[TrialArm] = []
+    active_arms: list[TrialArm] = []
     for arm in arms:
+        if arm in {"sft", "sft_validator"} and not settings.trial_sft_model.strip():
+            skipped_arms.append(arm)
+            continue
+        active_arms.append(arm)
+    for arm in active_arms:
         for case in cases:
             evaluation, valid_refs, verifier_triggered, latency_ms = await _run_live_case(
                 case,
@@ -191,6 +198,8 @@ async def run_live_evaluation(
         metadata={
             "git_commit": _git_commit(),
             "mode": "live",
+            "requested_arms": list(arms),
+            "skipped_arms": skipped_arms,
             "sft_model": settings.trial_sft_model or None,
             "verifier_policy": "only sft_validator runs the deterministic gate",
         },
