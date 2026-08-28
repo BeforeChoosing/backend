@@ -17,6 +17,7 @@ ENV/
 .conda/
 conda-meta/
 .python-version
+uv.lock
 
 # Local configuration and secrets
 .env
