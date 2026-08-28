@@ -11,6 +11,7 @@ from threading import Lock
 from typing import Any
 
 from app.config import Settings, get_settings
+from app.agents.trial_agent import TrialAgent
 from app.services.llm_gateway import DashScopeQwenGateway
 from app.training.cases import (
     TrialCaseInput,
@@ -133,9 +134,12 @@ class TeacherLabeler:
         *,
         model: str | None = None,
         prompt_version: str | None = None,
+        prompt_variant: str = "prompt",
         force: bool = False,
         dry_run: bool = False,
     ) -> TeacherResponse:
+        if prompt_variant not in {"base", "prompt"}:
+            raise ValueError("prompt_variant 必须是 base 或 prompt")
         selected_model = (model or self.settings.trial_teacher_model).strip()
         selected_prompt_version = (prompt_version or self.settings.trial_teacher_prompt_version).strip()
         if not selected_model:
@@ -164,7 +168,9 @@ class TeacherLabeler:
                     status="planned",
                 )
             raw = self.gateway.generate_json(
-                build_teacher_system_prompt(),
+                TrialAgent.BASE_SYSTEM_PROMPT
+                if prompt_variant == "base"
+                else build_teacher_system_prompt(),
                 build_teacher_user_prompt(case, prompt_version=selected_prompt_version),
                 model=selected_model,
             )

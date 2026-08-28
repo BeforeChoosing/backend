@@ -176,6 +176,7 @@ def test_case_generator_validates_quality_level_and_reuses_cache(tmp_path: Path)
     first = generator.generate("M-02", quality_level="L3", model="case-v1")
     second = generator.generate("M-02", quality_level="L3", model="case-v1")
     planned = generator.generate("M-02", quality_level="L4", model="case-v1", dry_run=True)
+    variant = generator.generate("M-02", quality_level="L3", model="case-v1", variant=2)
 
     assert first.raw == generated_answer
     assert first.api_calls == 1
@@ -183,7 +184,9 @@ def test_case_generator_validates_quality_level_and_reuses_cache(tmp_path: Path)
     assert second.api_calls == 0
     assert planned.status == "planned"
     assert planned.raw is None
-    assert gateway.calls == 1
+    assert variant.api_calls == 1
+    assert variant.cache_hit is False
+    assert gateway.calls == 2
 
     try:
         generator.generate("M-02", quality_level="L6")

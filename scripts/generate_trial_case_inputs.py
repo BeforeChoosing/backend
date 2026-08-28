@@ -45,6 +45,12 @@ def parse_args() -> argparse.Namespace:
         default="L1,L2,L3,L4,L5",
         help="质量级别，逗号分隔，默认 L1-L5",
     )
+    parser.add_argument(
+        "--variants",
+        type=int,
+        default=1,
+        help="每个任务/质量级别生成的独立变体数，默认 1",
+    )
     parser.add_argument("--model", help="案例生成模型；默认读取 TRIAL_TEACHER_MODEL")
     parser.add_argument("--prompt-version", help="Prompt 版本；默认读取 TRIAL_TEACHER_PROMPT_VERSION")
     parser.add_argument("--cache", type=Path, help="SQLite 缓存路径；默认读取 TRIAL_TEACHER_CACHE_PATH")
@@ -69,9 +75,24 @@ def _write(path: Path, row: dict) -> None:
         handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def _case_id(task_id: str, level: str, variant: int) -> str:
+    base = f"synthetic-{task_id.lower()}-{level.lower()}"
+    return base if variant == 1 else f"{base}-v{variant:02d}"
+
+
 def _validate_generated_answer(raw: object) -> DynamicTrialAnswer:
     if not isinstance(raw, dict):
         raise ValueError("模型返回的案例不是 JSON 对象")
+    # 出牌记录不是文本评价训练的必填证据。模型偶尔会把它写成
+    # ``{"round": 1, "played_cards": [...]}`` 等旧格式；丢弃这些
+    # 不完整条目，避免整条案例因可选字段污染而丢失。
+    normalized = dict(raw)
+    rounds = normalized.get("card_play_rounds")
+    if isinstance(rounds, list):
+        normalized["card_play_rounds"] = [
+            item for item in rounds
+            if isinstance(item, dict) and isinstance(item.get("challenge_id"), str)
+        ]
     step_answers = raw.get("step_answers")
     if not isinstance(step_answers, dict):
         raise ValueError("模型返回的案例缺少 step_answers")
@@ -80,7 +101,7 @@ def _validate_generated_answer(raw: object) -> DynamicTrialAnswer:
     ]
     if not filled_steps:
         raise ValueError("模型返回的案例没有任何有效步骤作答")
-    return DynamicTrialAnswer.model_validate(raw)
+    return DynamicTrialAnswer.model_validate(normalized)
 
 
 def main() -> int:
@@ -98,7 +119,15 @@ def main() -> int:
         print("--limit 必须大于 0", file=sys.stderr)
         return 2
 
-    jobs = [(task_id, level) for task_id in tasks for level in levels]
+    if args.variants < 1:
+        print("--variants 必须大于 0", file=sys.stderr)
+        return 2
+    jobs = [
+        (task_id, level, variant)
+        for task_id in tasks
+        for level in levels
+        for variant in range(1, args.variants + 1)
+    ]
     if args.resume and args.output.exists():
         existing_case_ids: set[str] = set()
         for line_number, line in enumerate(args.output.read_text(encoding="utf-8").splitlines(), 1):
@@ -112,9 +141,9 @@ def main() -> int:
             if isinstance(row, dict) and isinstance(row.get("case_id"), str):
                 existing_case_ids.add(row["case_id"])
         jobs = [
-            (task_id, level)
-            for task_id, level in jobs
-            if f"synthetic-{task_id.lower()}-{level.lower()}" not in existing_case_ids
+            (task_id, level, variant)
+            for task_id, level, variant in jobs
+            if _case_id(task_id, level, variant) not in existing_case_ids
         ]
     if args.limit is not None:
         jobs = jobs[: args.limit]
@@ -127,8 +156,8 @@ def main() -> int:
     print(f"缓存：{cache_path}")
     print(f"最多计划调用：{len(jobs)}（缓存命中时不调用）")
     if args.dry_run:
-        for task_id, level in jobs:
-            print(f"- {task_id} / {level}")
+        for task_id, level, variant in jobs:
+            print(f"- {task_id} / {level} / v{variant:02d}")
         return 0
 
     if not args.resume and args.output.exists():
@@ -140,19 +169,20 @@ def main() -> int:
     )
     failed = 0
     written = 0
-    for index, (task_id, level) in enumerate(jobs, 1):
+    for index, (task_id, level, variant) in enumerate(jobs, 1):
         try:
             response = generator.generate(
                 task_id,
                 quality_level=level,
                 model=model,
                 prompt_version=prompt_version,
+                variant=variant,
                 force=args.force,
             )
             if response.raw is None:
                 raise ValueError("模型未返回答案 JSON")
             answer = _validate_generated_answer(response.raw)
-            case_id = f"synthetic-{task_id.lower()}-{level.lower()}"
+            case_id = _case_id(task_id, level, variant)
             evidence_bundle = TrialScoringService.build_evidence(
                 get_task_definition(task_id),
                 answer,
@@ -177,6 +207,7 @@ def main() -> int:
                     "metadata": {
                         "source": "qwen_case_generator",
                         "requested_quality_level": level,
+                        "variant": variant,
                         "generator_model": response.model,
                         "generator_prompt_version": response.prompt_version,
                         "generator_request_fingerprint": response.fingerprint,

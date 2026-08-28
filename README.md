@@ -302,6 +302,8 @@ python .\scripts\evaluate_trial_agent.py `
 conda activate before-choosing-demo
 python scripts/generate_trial_case_inputs.py --task M-02 --levels L3,L4 --dry-run
 python scripts/generate_trial_case_inputs.py --task M-02 --levels L3,L4
+# 扩充为 DPO 候选集：12 个任务 × 5 个质量级别 × 2 个独立变体
+python scripts/generate_trial_case_inputs.py --levels L1,L2,L3,L4,L5 --variants 2 --resume
 ```
 
 Windows PowerShell：
@@ -310,9 +312,13 @@ Windows PowerShell：
 conda activate before-choosing-demo
 python .\scripts\generate_trial_case_inputs.py --task M-02 --levels L3,L4 --dry-run
 python .\scripts\generate_trial_case_inputs.py --task M-02 --levels L3,L4
+# 扩充为 DPO 候选集
+python .\scripts\generate_trial_case_inputs.py --levels L1,L2,L3,L4,L5 --variants 2 --resume
 ```
 
-真实生成最多按“任务数 × 质量级别数”调用一次文本模型；默认使用 `TRIAL_TEACHER_MODEL`。生成答案不等同于金标准，不能直接训练。
+真实生成最多按“任务数 × 质量级别数 × 变体数”调用一次文本模型；默认使用 `TRIAL_TEACHER_MODEL`。
+`--variants 2` 时目标为 120 条案例，覆盖每个任务的 L1–L5 和两种独立作答；已有 case_id 会被
+`--resume` 跳过。生成答案不等同于金标准，不能直接训练，必须经过教师评价、证据校验和重复筛选。
 
 2. 使用教师模型生成评价并执行确定性校验。教师调用一次；命中缺失维度、权重不一致、无效证据引用、重复标签或非高置信度时，才升级到 `TRIAL_REVIEW_MODEL`：
 
@@ -336,7 +342,59 @@ python .\scripts\build_trial_teacher_labels.py `
 
 `--dry-run` 不会写入伪造评价；正式运行会写入本地 `teacher_labels.local.jsonl`，并保留每条校验状态、证据覆盖率、原因码、模型和请求指纹。`silver_auto` 是可进入候选 SFT 的自动通过记录，`needs_review` 必须由人工抽检并在元数据中标记 `human_reviewed=true`。
 
-3. 导出 SFT 候选。默认只导出 `silver_auto`、`human_approved`、`gold` 和 `approved`；需要纳入已人工审核的异常记录时显式加 `--include-needs-review`：
+3. 生成基础评价并准备 Sol 对比包。基础评价使用 `TrialAgent.BASE_SYSTEM_PROMPT`，只作为 DPO
+   的候选拒答；强化评价使用上一步的 `qwen3-vl-plus` 结果。两种评价分别缓存，单条案例最多各调用一次：
+
+```bash
+python scripts/build_trial_teacher_labels.py \
+  --input datasets/trial_agent/v1/case_inputs.local.jsonl \
+  --output datasets/trial_agent/v1/baseline_labels.local.jsonl \
+  --prompt-variant base --model qwen-plus --prompt-version trial-base-v1 \
+  --no-review --resume
+python scripts/prepare_sol_pair_packets.py \
+  --cases datasets/trial_agent/v1/case_inputs.local.jsonl \
+  --teacher datasets/trial_agent/v1/teacher_labels.generated.local.jsonl \
+  --baseline datasets/trial_agent/v1/baseline_labels.local.jsonl \
+  --resume
+```
+
+Windows PowerShell：
+
+```powershell
+python .\scripts\build_trial_teacher_labels.py `
+  --input .\datasets\trial_agent\v1\case_inputs.local.jsonl `
+  --output .\datasets\trial_agent\v1\baseline_labels.local.jsonl `
+  --prompt-variant base --model qwen-plus --prompt-version trial-base-v1 `
+  --no-review --resume
+python .\scripts\prepare_sol_pair_packets.py `
+  --cases .\datasets\trial_agent\v1\case_inputs.local.jsonl `
+  --teacher .\datasets\trial_agent\v1\teacher_labels.generated.local.jsonl `
+  --baseline .\datasets\trial_agent\v1\baseline_labels.local.jsonl `
+  --resume
+```
+
+每个 packet 对应一条案例的 baseline/teacher 评价对。将 packet 交给一个独立的
+`gpt-5.6-sol`、高推理强度子任务，结果写入同名的
+`datasets/trial_agent/v1/sol_review_results.local/` 文件，不能修改 packet。结果必须包含
+`case_id`、`pair_valid`、`chosen_source`、`rejected_source`、`enhanced_evaluation`、`rationale`；
+`enhanced_evaluation` 只能引用该 packet 的证据目录。每个 DPO 对只使用一个子任务复核，不能把
+一个子任务的结论批量套用到其他案例。
+
+所有子任务结果写完后，离线校验并导出显式 DPO 对：
+
+```bash
+python scripts/finalize_sol_pair_reviews.py \
+  --cases datasets/trial_agent/v1/case_inputs.local.jsonl \
+  --teacher datasets/trial_agent/v1/teacher_labels.generated.local.jsonl \
+  --baseline datasets/trial_agent/v1/baseline_labels.local.jsonl \
+  --reviews-dir datasets/trial_agent/v1/sol_review_results.local
+```
+
+只有证据引用有效、chosen/rejected 有真实差异且 Sol 明确判定 `pair_valid=true` 的记录会进入
+`sol_dpo_pairs.local.jsonl`；其余记录保留在 `sol_pair_reviews.local.jsonl` 供人工抽检，不会被
+静默转成负样本。目标数据量为 120 条案例和尽可能多的有效对，实际 DPO 数量以校验结果为准。
+
+4. 导出 SFT 候选。默认只导出 `silver_auto`、`human_approved`、`gold` 和 `approved`；需要纳入已人工审核的异常记录时显式加 `--include-needs-review`：
 
 ```bash
 python scripts/export_trial_teacher_dataset.py \

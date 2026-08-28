@@ -21,6 +21,7 @@ from app.services.llm_gateway import LLMGatewayError  # noqa: E402
 from app.tasks.catalog import get_task_definition  # noqa: E402
 from app.training.cases import TrialCaseInput, load_case_inputs  # noqa: E402
 from app.training.cases import case_fingerprint  # noqa: E402
+from app.agents.trial_agent import TrialAgent  # noqa: E402
 from app.training.teacher import (  # noqa: E402
     TeacherCache,
     TeacherLabeler,
@@ -45,6 +46,12 @@ def parse_args() -> argparse.Namespace:
         help="教师评价输出 JSONL，默认写入本地忽略路径",
     )
     parser.add_argument("--model", help="教师模型；默认读取 TRIAL_TEACHER_MODEL")
+    parser.add_argument(
+        "--prompt-variant",
+        choices=("prompt", "base"),
+        default="prompt",
+        help="评价提示版本；base 用于构造基线评价，默认使用强化版",
+    )
     parser.add_argument("--review-model", help="低置信度复核模型；默认读取 TRIAL_REVIEW_MODEL")
     parser.add_argument("--no-review", action="store_true", help="不升级到复核模型")
     parser.add_argument("--cache", type=Path, help="SQLite 缓存路径；默认读取 TRIAL_TEACHER_CACHE_PATH")
@@ -227,6 +234,7 @@ def _label_case(
     *,
     model: str,
     prompt_version: str,
+    prompt_variant: str,
     review_model: str | None,
     force: bool,
     dry_run: bool,
@@ -235,6 +243,7 @@ def _label_case(
         case,
         model=model,
         prompt_version=prompt_version,
+        prompt_variant=prompt_variant,
         force=force,
         dry_run=dry_run,
     )
@@ -249,6 +258,7 @@ def _label_case(
             case,
             model=review_model,
             prompt_version=f"{prompt_version}-review",
+            prompt_variant=prompt_variant,
             force=force,
             dry_run=dry_run,
         )
@@ -290,7 +300,12 @@ def main() -> int:
         print("没有需要处理的案例。")
         return 0
     model = (args.model or settings.trial_teacher_model).strip()
-    prompt_version = (args.prompt_version or settings.trial_teacher_prompt_version).strip()
+    default_prompt_version = (
+        TrialAgent.BASE_PROMPT_VERSION
+        if args.prompt_variant == "base"
+        else settings.trial_teacher_prompt_version
+    )
+    prompt_version = (args.prompt_version or default_prompt_version).strip()
     review_model = None if args.no_review else (args.review_model or settings.trial_review_model).strip()
     cache_path = args.cache or Path(settings.trial_teacher_cache_path)
     labeler = TeacherLabeler(settings=settings, cache=TeacherCache(cache_path))
@@ -308,6 +323,7 @@ def main() -> int:
                 case,
                 model=model,
                 prompt_version=prompt_version,
+                prompt_variant=args.prompt_variant,
                 review_model=None,
                 force=args.force,
                 dry_run=True,
@@ -343,6 +359,7 @@ def main() -> int:
                 case,
                 model=model,
                 prompt_version=prompt_version,
+                prompt_variant=args.prompt_variant,
                 review_model=review_model,
                 force=args.force,
                 dry_run=False,

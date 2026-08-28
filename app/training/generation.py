@@ -43,10 +43,16 @@ def build_case_generation_prompt(
     *,
     quality_level: str,
     prompt_version: str,
+    variant: int = 1,
 ) -> str:
     task = get_task_definition(task_id)
     payload = {
         "prompt_version": prompt_version,
+        "variant": variant,
+        "variant_instruction": (
+            "在同一任务和质量级别下生成与其他变体不同的具体作答，"
+            "保持事实范围、步骤 ID 和证据边界不变。"
+        ),
         "quality_level": quality_level,
         "quality_level_definition": {
             "L1": "只写零散意图，缺少可执行步骤和证据",
@@ -85,12 +91,14 @@ def generation_fingerprint(
     quality_level: str,
     model: str,
     prompt_version: str,
+    variant: int = 1,
 ) -> str:
     body = {
         "task_id": task_id,
         "quality_level": quality_level,
         "model": model,
         "prompt_version": prompt_version,
+        "variant": variant,
     }
     encoded = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -117,11 +125,14 @@ class CaseGenerator:
         quality_level: str,
         model: str | None = None,
         prompt_version: str | None = None,
+        variant: int = 1,
         force: bool = False,
         dry_run: bool = False,
     ) -> GeneratedCaseResponse:
         if quality_level not in {"L1", "L2", "L3", "L4", "L5"}:
             raise ValueError("quality_level 必须是 L1-L5")
+        if not isinstance(variant, int) or variant < 1:
+            raise ValueError("variant 必须是大于 0 的整数")
         task = get_task_definition(task_id)
         selected_model = (model or self.settings.trial_teacher_model).strip()
         selected_prompt_version = (
@@ -134,6 +145,7 @@ class CaseGenerator:
             quality_level=quality_level,
             model=selected_model,
             prompt_version=selected_prompt_version,
+            variant=variant,
         )
         with self.cache.lock(fingerprint):
             if not force:
@@ -167,6 +179,7 @@ class CaseGenerator:
                     task.id,
                     quality_level=quality_level,
                     prompt_version=selected_prompt_version,
+                    variant=variant,
                 ),
                 model=selected_model,
             )
