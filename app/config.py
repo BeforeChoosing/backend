@@ -11,6 +11,11 @@ def _csv(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
+def _env_or_default(name: str, default: str) -> str:
+    value = os.getenv(name, "").strip()
+    return value or default
+
+
 def _service_url(base_url: str, path: str) -> str:
     """Derive a DashScope service endpoint from the configured chat host."""
     parsed = urlsplit(base_url)
@@ -36,7 +41,7 @@ class Settings:
     profile_db_path: str = os.getenv("PROFILE_DB_PATH", "profile.db")
     knowledge_dir: str = os.getenv("KNOWLEDGE_DIR", "knowledge/public")
     knowledge_db_path: str = os.getenv("KNOWLEDGE_DB_PATH", "knowledge.db")
-    bailian_embedding_url: str = os.getenv(
+    bailian_embedding_url: str = _env_or_default(
         "BAILIAN_EMBEDDING_URL",
         _service_url(
             _CHAT_URL,
@@ -52,7 +57,7 @@ class Settings:
     bailian_embedding_batch_size: int = int(
         os.getenv("BAILIAN_EMBEDDING_BATCH_SIZE", "20")
     )
-    bailian_rerank_url: str = os.getenv(
+    bailian_rerank_url: str = _env_or_default(
         "BAILIAN_RERANK_URL",
         _service_url(_CHAT_URL, "/api/v1/services/rerank/text-rerank/text-rerank"),
     )

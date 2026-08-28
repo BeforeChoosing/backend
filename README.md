@@ -51,11 +51,11 @@ Copy-Item .env.example .env
 DASHSCOPE_API_KEY=你的百炼密钥
 QWEN_MODEL=qwen-plus
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
-BAILIAN_EMBEDDING_URL=https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding
+BAILIAN_EMBEDDING_URL=
 BAILIAN_EMBEDDING_MODEL=qwen3.7-text-embedding
 BAILIAN_EMBEDDING_DIMENSION=1024
 BAILIAN_EMBEDDING_BATCH_SIZE=20
-BAILIAN_RERANK_URL=https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
+BAILIAN_RERANK_URL=
 BAILIAN_RERANK_MODEL=qwen3-rerank
 RAG_RETRIEVER_MODE=hybrid
 RAG_CANDIDATE_LIMIT=20
@@ -66,6 +66,8 @@ KNOWLEDGE_DIR=knowledge/public
 KNOWLEDGE_DB_PATH=knowledge.db
 CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ```
+
+`BAILIAN_EMBEDDING_URL` 和 `BAILIAN_RERANK_URL` 留空时，会自动沿用 `DASHSCOPE_BASE_URL` 的工作空间 Host；使用百炼专属工作空间时只需填写聊天地址和密钥。
 
 `.env` 不会提交到 Git。
 
