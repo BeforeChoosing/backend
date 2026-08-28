@@ -210,6 +210,24 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 
 前端上传普通文字 PDF 时只调用文字提取；检测到 PDF 没有文字层，或上传 PNG/JPG/WebP 时才调用一次 Qwen-VL。这样不会为同一份可复制文本重复支付视觉调用。旧版 `.doc` 和外部链接抓取仍不在支持范围。
 
+多模态定位评测使用独立的人工标注集，金标准记录材料标识、页码、归一化区域和连续文字。离线脚本按同材料、同页、区域 IoU 与文字相似度进行一对一匹配，输出页码命中率、定位 IoU、证据精确率/召回率、材料覆盖率和页面覆盖率；样例只验证报告链路，不作为精度结论：
+
+```bash
+conda run -n before-choosing-demo python scripts/evaluate_multimodal.py \
+  --cases datasets/multimodal/eval/cases.example.jsonl \
+  --predictions datasets/multimodal/eval/predictions.example.jsonl
+```
+
+Windows PowerShell：
+
+```powershell
+conda run -n before-choosing-demo python .\scripts\evaluate_multimodal.py `
+  --cases .\datasets\multimodal\eval\cases.example.jsonl `
+  --predictions .\datasets\multimodal\eval\predictions.example.jsonl
+```
+
+正式评测需由人工审核材料后生成 `cases.jsonl`，再导入实际 Qwen-VL 预测；报告输出到已忽略的 `evaluation-results/multimodal-v1/`，评测本身不调用百炼。
+
 ## 12 个固定试路任务与动态选题
 
 当前 Demo 接入 CoachAgent 任务库中的 12 个已校准任务，覆盖 Feature、Application / Agent、Platform / Developer、Model / Eval / Data 四类 AI 产品经理方向。任务材料、五步作答 Schema、中途事件、三级 Coach 提示、Rubric 权重和 L1–L5 行为锚点均来自 Demo 资料；模拟业务数据和案例在接口中明确标识。

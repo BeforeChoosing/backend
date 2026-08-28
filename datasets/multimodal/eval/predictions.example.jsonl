@@ -1,0 +1,1 @@
+{"case_id":"mm-example-001","items":[{"material_id":"resume","page":1,"bbox":[120,120,480,480],"quote":"负责用户访谈并完成方案迭代","confidence":0.92},{"material_id":"portfolio","page":2,"bbox":[200,200,700,700],"quote":"上线后留存率提升 18%","confidence":0.88}],"api_calls":1,"latency_ms":1200}
