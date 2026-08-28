@@ -54,6 +54,10 @@ QWEN_MODEL=qwen-plus
 TRIAL_BASE_MODEL=qwen-plus
 TRIAL_SFT_MODEL=
 TRIAL_VERIFIER_MODEL=
+TRIAL_TEACHER_MODEL=qwen3-vl-plus
+TRIAL_REVIEW_MODEL=qwen3-vl-235b-a22b-instruct
+TRIAL_TEACHER_PROMPT_VERSION=trial-teacher-v1
+TRIAL_TEACHER_CACHE_PATH=datasets/trial_agent/v1/teacher_cache.sqlite3
 TRIAL_VERIFIER_MIN_EVIDENCE_COVERAGE=0.75
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
 BAILIAN_EMBEDDING_URL=
@@ -258,7 +262,7 @@ Qwen 只评价固定任务中的可观察行为。接口返回各 Rubric 的分�
 
 ## TrialAgent 评测、SFT 与低置信度校验
 
-评测数据与训练数据分开管理。训练记录必须是固定 12 个任务的人工审核 ChatML；脚本只校验格式和任务白名单，不生成训练标签。标注边界、输入 JSONL 格式和 SFT 分片命令见 [`datasets/trial_agent/v1/README.md`](datasets/trial_agent/v1/README.md)。生成目录已忽略，不会把训练产物提交到 Git。
+评测数据与训练数据分开管理。所有案例必须来自固定 12 个任务库；教师模型生成的内容只作为银标候选，经过结构化校验、证据引用校验、重复过滤和人工抽检后，才可以进入 SFT。多模态模型只用于运行时材料提取和证据定位，不进入这条文本评价训练链路。标注边界、输入 JSONL 格式和 SFT 分片命令见 [`datasets/trial_agent/v1/README.md`](datasets/trial_agent/v1/README.md)。本地缓存、标签和生成目录均已忽略，不会提交训练产物。
 
 统一评测报告支持四组对照：`base_qwen`（基线 Qwen）、`prompt_hardened`（当前提示词）、`sft`（百炼部署后的 TrialAgent 微调模型）和 `sft_validator`（SFT 加证据校验链）。报告统计结构合法率、分项分数 MAE、Observed Level 准确率及 ±1 命中率、证据精确率/召回率、无效引用和平均 API 调用次数，并记录数据集哈希、模型、提示词版本和 Git 提交号。
 
@@ -287,6 +291,72 @@ python .\scripts\evaluate_trial_agent.py `
 ### 百炼 SFT 操作边界
 
 `TRIAL_SFT_MODEL` 只填写已经在百炼完成训练并部署的模型 ID。代码负责准备 ChatML 数据、读取部署模型并做四组对照，不会在本机自动创建训练任务或上传含个人信息的数据。训练完成后把模型 ID 写入 `.env`，再使用锁定测试集生成报告。
+
+### 教师生成、异常抽检与数据导出
+
+案例生成和教师评价均提供本地 SQLite 缓存。相同任务、质量级别、模型和 Prompt 版本只产生一次 API 请求；`--dry-run` 只检查输入和打印计划，不调用百炼。
+
+1. 生成文本作答案例候选。默认覆盖 12 个固定任务和 L1–L5 五个质量级别；可以先只生成一个任务验证格式：
+
+```bash
+conda activate before-choosing-demo
+python scripts/generate_trial_case_inputs.py --task M-02 --levels L3,L4 --dry-run
+python scripts/generate_trial_case_inputs.py --task M-02 --levels L3,L4
+```
+
+Windows PowerShell：
+
+```powershell
+conda activate before-choosing-demo
+python .\scripts\generate_trial_case_inputs.py --task M-02 --levels L3,L4 --dry-run
+python .\scripts\generate_trial_case_inputs.py --task M-02 --levels L3,L4
+```
+
+真实生成最多按“任务数 × 质量级别数”调用一次文本模型；默认使用 `TRIAL_TEACHER_MODEL`。生成答案不等同于金标准，不能直接训练。
+
+2. 使用教师模型生成评价并执行确定性校验。教师调用一次；命中缺失维度、权重不一致、无效证据引用、重复标签或非高置信度时，才升级到 `TRIAL_REVIEW_MODEL`：
+
+```bash
+python scripts/build_trial_teacher_labels.py \
+  --input datasets/trial_agent/v1/case_inputs.local.jsonl \
+  --dry-run
+python scripts/build_trial_teacher_labels.py \
+  --input datasets/trial_agent/v1/case_inputs.local.jsonl
+```
+
+Windows PowerShell：
+
+```powershell
+python .\scripts\build_trial_teacher_labels.py `
+  --input .\datasets\trial_agent\v1\case_inputs.local.jsonl `
+  --dry-run
+python .\scripts\build_trial_teacher_labels.py `
+  --input .\datasets\trial_agent\v1\case_inputs.local.jsonl
+```
+
+`--dry-run` 不会写入伪造评价；正式运行会写入本地 `teacher_labels.local.jsonl`，并保留每条校验状态、证据覆盖率、原因码、模型和请求指纹。`silver_auto` 是可进入候选 SFT 的自动通过记录，`needs_review` 必须由人工抽检并在元数据中标记 `human_reviewed=true`。
+
+3. 导出 SFT 候选。默认只导出 `silver_auto`、`human_approved`、`gold` 和 `approved`；需要纳入已人工审核的异常记录时显式加 `--include-needs-review`：
+
+```bash
+python scripts/export_trial_teacher_dataset.py \
+  --input datasets/trial_agent/v1/teacher_labels.local.jsonl \
+  --sft-output datasets/trial_agent/v1/teacher_sft.local.jsonl
+python scripts/build_trial_sft_dataset.py \
+  --input datasets/trial_agent/v1/teacher_sft.local.jsonl \
+  --output-dir datasets/trial_agent/v1/generated
+```
+
+DPO 不从单条教师输出自动制造拒答样本。只有提供人工审核的 `chosen_evaluation` 与 `rejected_evaluation` pair 时，才会导出 `dpo-chatml-v1` 候选，避免把未审核的模型错误当作负样本：
+
+```bash
+python scripts/export_trial_teacher_dataset.py \
+  --input datasets/trial_agent/v1/teacher_labels.local.jsonl \
+  --dpo-input datasets/trial_agent/v1/reviewed_pairs.local.jsonl \
+  --dpo-output datasets/trial_agent/v1/teacher_dpo.local.jsonl
+```
+
+以上命令均为本地数据处理；只有不带 `--dry-run` 的案例生成和教师评价命令会调用百炼。多模态材料不会被送入 SFT/DPO 数据，图片内容必须先由运行时 Qwen-VL 转成带来源定位的文本证据。
 
 ## 本地岗位 RAG 与职业推演
 

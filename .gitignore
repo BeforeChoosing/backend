@@ -54,6 +54,11 @@ vector-cache/
 evaluation-results/
 datasets/trial_agent/v1/generated/
 datasets/trial_agent/v1/annotated.local.jsonl
+datasets/trial_agent/v1/teacher_labels.local.jsonl
+datasets/trial_agent/v1/case_inputs.local.jsonl
+datasets/trial_agent/v1/teacher_sft.local.jsonl
+datasets/trial_agent/v1/teacher_dpo.local.jsonl
+datasets/trial_agent/v1/reviewed_pairs.local.jsonl
 *.sqlite
 *.sqlite3
 *.db

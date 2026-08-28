@@ -40,6 +40,16 @@ class Settings:
     trial_base_model: str = os.getenv("TRIAL_BASE_MODEL", "")
     trial_sft_model: str = os.getenv("TRIAL_SFT_MODEL", "")
     trial_verifier_model: str = os.getenv("TRIAL_VERIFIER_MODEL", "")
+    trial_teacher_model: str = os.getenv("TRIAL_TEACHER_MODEL", "qwen3-vl-plus")
+    trial_review_model: str = os.getenv(
+        "TRIAL_REVIEW_MODEL", "qwen3-vl-235b-a22b-instruct"
+    )
+    trial_teacher_prompt_version: str = os.getenv(
+        "TRIAL_TEACHER_PROMPT_VERSION", "trial-teacher-v1"
+    )
+    trial_teacher_cache_path: str = os.getenv(
+        "TRIAL_TEACHER_CACHE_PATH", "datasets/trial_agent/v1/teacher_cache.sqlite3"
+    )
     trial_verifier_min_evidence_coverage: float = float(
         os.getenv("TRIAL_VERIFIER_MIN_EVIDENCE_COVERAGE", "0.75")
     )
