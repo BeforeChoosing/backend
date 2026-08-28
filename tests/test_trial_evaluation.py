@@ -27,6 +27,7 @@ def test_dynamic_evaluation_is_bound_to_source_rubric_and_coach_confidence() -> 
                 "weight": 1,
                 "score": 80,
                 "evidence": "回答与该维度有关。",
+                "evidence_refs": ["answer:validation", "invented:ref"],
             }
             for criterion in task.rubric
         ]
@@ -58,3 +59,4 @@ def test_dynamic_evaluation_is_bound_to_source_rubric_and_coach_confidence() -> 
     assert evaluation.coach_dependency == "强提示"
     assert evaluation.confidence == "中"
     assert len(evaluation.supporting_evidence) == 1
+    assert evaluation.dimensions[0].evidence_refs == ["answer:validation", "invented:ref"]
