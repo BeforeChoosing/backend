@@ -1,6 +1,9 @@
 import asyncio
+import json
 
+from app.config import Settings
 from app.services.multimodal_evidence import MultimodalEvidenceExtractor
+from app.services.vision_gateway import DashScopeVisionGateway, VisionImage
 
 
 class FakeVisionGateway:
@@ -68,3 +71,42 @@ def test_image_evidence_discards_invalid_regions() -> None:
 
     assert response.items == []
     assert response.rejected_count == 2
+
+
+def test_vision_gateway_sends_data_url_to_bailian(monkeypatch) -> None:
+    captured = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {"choices": [{"message": {"content": '{"evidence": []}'}}]}
+            ).encode()
+
+    def fake_urlopen(request, timeout):
+        captured["payload"] = json.loads(request.data.decode())
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr("app.services.vision_gateway.urllib.request.urlopen", fake_urlopen)
+    settings = Settings(
+        dashscope_api_key="test-key",
+        dashscope_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        bailian_vision_model="qwen-vl-ocr",
+    )
+    payload = DashScopeVisionGateway(settings).generate_json(
+        "system",
+        "extract",
+        [VisionImage(page=1, data=b"png", mime_type="image/png")],
+    )
+
+    assert payload == {"evidence": []}
+    assert captured["payload"]["model"] == "qwen-vl-ocr"
+    assert captured["payload"]["messages"][1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
