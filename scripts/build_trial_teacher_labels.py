@@ -128,6 +128,9 @@ def _validation_record(
         "case_id": case.case_id,
         "task_id": task.id,
         "answer": case.answer.model_dump(mode="json"),
+        # 保留基础模型的原始 JSON，即使它未通过 TrialEvaluation 校验；
+        # DPO 需要把真实的失败输出作为 rejected，而不是凭空构造负样本。
+        "raw_evaluation": response.raw,
         "confirmed_card_ids": list(case.confirmed_card_ids),
         "evidence_catalog": list(case.evidence_catalog),
         "evaluation": evaluation,

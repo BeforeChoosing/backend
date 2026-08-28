@@ -78,6 +78,17 @@ def _evaluation(value: Any) -> dict[str, Any] | None:
         return None
 
 
+def _raw_evaluation(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return a model's raw JSON for a rejected DPO response.
+
+    Baseline output is intentionally allowed to be schema-invalid: that is
+    the real failure signal the DPO pair is meant to teach away from.
+    """
+
+    candidate = row.get("raw_evaluation") or row.get("evaluation")
+    return dict(candidate) if isinstance(candidate, Mapping) else None
+
+
 def _source_evaluation(
     source: str,
     *,
@@ -86,9 +97,9 @@ def _source_evaluation(
     enhanced: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     if source == "baseline":
-        return _evaluation(baseline.get("evaluation"))
+        return _raw_evaluation(baseline)
     if source == "teacher":
-        return _evaluation(teacher.get("evaluation"))
+        return _raw_evaluation(teacher)
     if source == "enhanced":
         return enhanced
     return None
@@ -187,7 +198,12 @@ def main() -> int:
                     "rejected_source": rejected_source,
                 },
             }
-            dpo_record = to_dpo_record(pair_row, index=index, prompt_version=args.prompt_version)
+            dpo_record = to_dpo_record(
+                pair_row,
+                index=index,
+                prompt_version=args.prompt_version,
+                allow_raw_rejected=True,
+            )
             if dpo_record is not None:
                 dpo_rows.append(dpo_record)
                 counts["exported"] += 1

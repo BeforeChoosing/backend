@@ -172,12 +172,24 @@ def _dpo_evaluation(row: Mapping[str, Any], key: str) -> dict[str, Any] | None:
         return None
 
 
-def to_dpo_record(row: Mapping[str, Any], *, index: int, prompt_version: str) -> dict[str, Any] | None:
+def to_dpo_record(
+    row: Mapping[str, Any],
+    *,
+    index: int,
+    prompt_version: str,
+    allow_raw_rejected: bool = False,
+) -> dict[str, Any] | None:
     """Build an internal DPO ChatML record from an explicitly reviewed pair."""
 
     case = _case_from_row(row, index)
     chosen = _dpo_evaluation(row, "chosen_evaluation") or _dpo_evaluation(row, "chosen")
     rejected = _dpo_evaluation(row, "rejected_evaluation") or _dpo_evaluation(row, "rejected")
+    raw_rejected: Mapping[str, Any] | None = None
+    if rejected is None and allow_raw_rejected:
+        candidate = row.get("rejected_evaluation") or row.get("rejected")
+        if isinstance(candidate, Mapping):
+            raw_rejected = candidate
+            rejected = dict(candidate)
     if chosen is None or rejected is None:
         return None
     if response_fingerprint(chosen) == response_fingerprint(rejected):
@@ -197,6 +209,7 @@ def to_dpo_record(row: Mapping[str, Any], *, index: int, prompt_version: str) ->
         "metadata": {
             "source": "human_reviewed_dpo_pair",
             "format": "dpo-chatml-v1",
+            "rejected_schema_valid": raw_rejected is None,
         },
     }
 
