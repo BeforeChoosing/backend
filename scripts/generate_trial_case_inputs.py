@@ -87,15 +87,54 @@ def _validate_generated_answer(raw: object) -> DynamicTrialAnswer:
     # ``{"round": 1, "played_cards": [...]}`` 等旧格式；丢弃这些
     # 不完整条目，避免整条案例因可选字段污染而丢失。
     normalized = dict(raw)
+    for field, limit in (
+        ("selected_card_ids", 12),
+        ("viewed_material_ids", 30),
+        ("evidence_refs", 12),
+    ):
+        value = normalized.get(field)
+        normalized[field] = (
+            [item for item in value if isinstance(item, str) and item.strip()][:limit]
+            if isinstance(value, list)
+            else []
+        )
     rounds = normalized.get("card_play_rounds")
     if isinstance(rounds, list):
-        normalized["card_play_rounds"] = [
-            item for item in rounds
-            if isinstance(item, dict) and isinstance(item.get("challenge_id"), str)
-        ]
+        clean_rounds: list[dict] = []
+        for item in rounds:
+            if not isinstance(item, dict) or not isinstance(item.get("challenge_id"), str):
+                continue
+            clean = dict(item)
+            for field in ("selected_card_ids", "matched_card_ids", "matched_skills"):
+                value = clean.get(field)
+                clean[field] = (
+                    [entry for entry in value if isinstance(entry, str) and entry.strip()][:3]
+                    if isinstance(value, list)
+                    else []
+                )
+            if clean.get("match_level") not in {"high", "partial", "low", None}:
+                clean["match_level"] = None
+            if not isinstance(clean.get("feedback"), str):
+                clean["feedback"] = ""
+            clean_rounds.append(clean)
+        normalized["card_play_rounds"] = clean_rounds[:3]
+    elif rounds is not None:
+        normalized["card_play_rounds"] = []
+    if not isinstance(normalized.get("card_play_current_index"), int):
+        normalized["card_play_current_index"] = 0
+    if normalized.get("event_decision") not in {"维持", "调整", None}:
+        normalized["event_decision"] = None
+    for field, limit in (("card_play_rationale", 1200), ("validation_hypothesis", 600), ("event_response", 1200)):
+        value = normalized.get(field)
+        normalized[field] = value[:limit] if isinstance(value, str) else ""
     step_answers = raw.get("step_answers")
     if not isinstance(step_answers, dict):
         raise ValueError("模型返回的案例缺少 step_answers")
+    normalized["step_answers"] = {
+        str(key): value[:4000]
+        for key, value in step_answers.items()
+        if isinstance(value, str) and value.strip()
+    }
     filled_steps = [
         value for value in step_answers.values() if isinstance(value, str) and value.strip()
     ]
