@@ -15,7 +15,13 @@ class DashScopeQwenGateway:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    def generate_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+    def generate_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        model: str | None = None,
+    ) -> dict[str, Any]:
         if not self.settings.qwen_configured:
             raise LLMGatewayError(
                 "未配置 DASHSCOPE_API_KEY。请在 backend/.env 中配置百炼密钥，"
@@ -23,7 +29,7 @@ class DashScopeQwenGateway:
             )
 
         payload = {
-            "model": self.settings.qwen_model,
+            "model": model or self.settings.qwen_model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

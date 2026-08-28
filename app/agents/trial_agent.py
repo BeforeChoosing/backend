@@ -20,6 +20,12 @@ class TrialAgent:
     """Evaluate a completed fixed task against its source rubric."""
 
     PROMPT_VERSION = "trial-v3-evidence"
+    BASE_PROMPT_VERSION = "trial-base-v1"
+    BASE_SYSTEM_PROMPT = """你是一个任务评价模型。请根据输入的任务、Rubric、答案和证据目录，输出合法 JSON。
+只评价用户实际写下的内容，不新增 Rubric，不编造事实。dimensions 必须逐字对应输入 Rubric，
+并返回 summary、dimensions、primary_ability、observed_level、level_reason、strengths、gaps、
+next_step、confidence、evidence_refs、supporting_evidence、process_evidence、coach_dependency、
+ability_applications。无法找到证据时写“证据不足”，不要输出长期能力等级、岗位匹配或认证结论。"""
     SYSTEM_PROMPT = """你是“选择之前”的任务评价助手。只评价用户在这一次固定任务中实际写下和做出的内容。
 任务数据和评分维度来自任务库，不能新增任务、补写材料或编造企业真实数据。
 不要按“标准答案”判对错；关注现象与原因是否分开、证据是否可追溯、优先级是否有影响面依据、验证动作是否能区分假设，以及事件后是否完成取舍。
@@ -67,13 +73,35 @@ Coach提示不直接扣分；根据提示使用级别把coach_dependency标为�
 }
 单次任务只形成 Observed Evidence，不得输出 Current Level、Potential Level、岗位胜任力认证、匹配百分比或真实企业结论。"""
 
-    def __init__(self, gateway: DashScopeQwenGateway):
+    def __init__(
+        self,
+        gateway: DashScopeQwenGateway,
+        *,
+        prompt_variant: str = "prompt",
+        model_override: str | None = None,
+    ):
         self.gateway = gateway
+        if prompt_variant not in {"base", "prompt"}:
+            raise ValueError(f"未知 TrialAgent prompt variant：{prompt_variant}")
+        self.prompt_variant = prompt_variant
+        self.model_override = model_override.strip() if model_override else None
+        self.prompt_version = (
+            self.BASE_PROMPT_VERSION if prompt_variant == "base" else self.PROMPT_VERSION
+        )
+
+    def _generate_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+        if self.model_override:
+            return self.gateway.generate_json(
+                system_prompt,
+                user_prompt,
+                model=self.model_override,
+            )
+        return self.gateway.generate_json(system_prompt, user_prompt)
 
     async def evaluate(self, task: A02Task, answer: A02Answer) -> TrialEvaluation:
         user_prompt = json.dumps(
             {
-                "prompt_version": self.PROMPT_VERSION,
+                "prompt_version": self.prompt_version,
                 "task_id": task.id,
                 "task_title": task.title,
                 "rubric": [item.model_dump(mode="json") for item in task.rubric],
@@ -82,8 +110,8 @@ Coach提示不直接扣分；根据提示使用级别把coach_dependency标为�
             ensure_ascii=False,
         )
         raw: dict[str, Any] = await asyncio.to_thread(
-            self.gateway.generate_json,
-            self.SYSTEM_PROMPT,
+            self._generate_json,
+            self.SYSTEM_PROMPT if self.prompt_variant == "prompt" else self.BASE_SYSTEM_PROMPT,
             user_prompt,
         )
         return TrialEvaluation.model_validate(raw)
@@ -199,7 +227,7 @@ Coach提示不直接扣分；根据提示使用级别把coach_dependency标为�
         )
         user_prompt = json.dumps(
             {
-                "prompt_version": self.PROMPT_VERSION,
+                "prompt_version": self.prompt_version,
                 "task_id": task.id,
                 "task_title": task.title,
                 "fixed_steps": [item.model_dump(mode="json") for item in task.steps],
@@ -225,8 +253,8 @@ Coach提示不直接扣分；根据提示使用级别把coach_dependency标为�
             ensure_ascii=False,
         )
         raw: dict[str, Any] = await asyncio.to_thread(
-            self.gateway.generate_json,
-            self.SYSTEM_PROMPT,
+            self._generate_json,
+            self.SYSTEM_PROMPT if self.prompt_variant == "prompt" else self.BASE_SYSTEM_PROMPT,
             user_prompt,
         )
         return self._normalize_dynamic(task, answer, raw)

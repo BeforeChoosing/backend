@@ -6,7 +6,7 @@
 经历输入 → 能力卡确认 → 本地岗位 RAG → 固定任务库选题 → 三轮能力应用推演 → 五步试路 → Qwen 评价 → 成长复盘 → Observed Evidence
 ```
 
-后端使用 Conda 管理 Python 环境，当前提供 FastAPI API、Qwen 网关、四个独立 Agent 和本地岗位知识库检索。
+后端使用 Conda 管理 Python 环境，当前提供 FastAPI API、Qwen 网关、四个独立 Agent、本地岗位知识库检索、TrialAgent 评测与多模态证据定位。
 岗位 RAG 采用本地 Markdown、SQLite FTS5、SQLite 向量表和百炼检索模型组合：资料与向量索引留在本机，百炼只接收必要的文本请求，不使用托管知识库或本地下载模型。
 
 四个 Agent 的职责和写入边界如下：
@@ -26,6 +26,7 @@
 
 - macOS/Linux 或 Windows 已安装 Conda（Miniforge 或 Anaconda）。
 - 已准备阿里云百炼/DashScope API Key。
+- 扫描 PDF 的页面渲染依赖 `PyMuPDF`，已列入 `environment.yml`；更新已有环境后执行 `conda env update -f environment.yml --prune`。
 
 ## 第一次安装
 
@@ -50,6 +51,10 @@ Copy-Item .env.example .env
 ```env
 DASHSCOPE_API_KEY=你的百炼密钥
 QWEN_MODEL=qwen-plus
+TRIAL_BASE_MODEL=qwen-plus
+TRIAL_SFT_MODEL=
+TRIAL_VERIFIER_MODEL=
+TRIAL_VERIFIER_MIN_EVIDENCE_COVERAGE=0.75
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
 BAILIAN_EMBEDDING_URL=
 BAILIAN_EMBEDDING_MODEL=qwen3.7-text-embedding
@@ -57,6 +62,8 @@ BAILIAN_EMBEDDING_DIMENSION=1024
 BAILIAN_EMBEDDING_BATCH_SIZE=20
 BAILIAN_RERANK_URL=
 BAILIAN_RERANK_MODEL=qwen3-rerank
+BAILIAN_VISION_MODEL=qwen-vl-ocr
+MULTIMODAL_MAX_PAGES=8
 RAG_RETRIEVER_MODE=hybrid
 RAG_CANDIDATE_LIMIT=20
 RAG_RERANK_LIMIT=5
@@ -195,9 +202,13 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 
 候选卡接口同样会复用完全相同输入的有效模型结果。接口只返回候选证据卡，不会直接写入已确认画像。缺少 `DASHSCOPE_API_KEY`、网络不可用或 Qwen 输出无法通过结构化校验时，会返回明确错误，不生成伪造结果。
 
-## 上传材料提取
+## 上传材料提取与多模态证据
 
-`POST /api/v1/profile/materials/extract` 接收最大 20MB 的 PDF、Word (`.docx`)、Markdown 或 TXT 文档，只在内存中提取可复制文本，并把最多 12000 字返回前端供用户核对。扫描件 OCR、旧版 `.doc` 和外部链接抓取当前不在支持范围；接口不会把原文件或提取结果直接写入长期画像。
+`POST /api/v1/profile/materials/extract` 接收最大 20MB 的 PDF、Word (`.docx`)、Markdown 或 TXT 文档，只在内存中提取可复制文本，并把最多 12000 字返回前端供用户核对。接口不会把原文件或提取结果直接写入长期画像。
+
+`POST /api/v1/profile/materials/multimodal-extract` 使用 `.env` 中的 `BAILIAN_VISION_MODEL`（默认 `qwen-vl-ocr`）处理图片材料和扫描 PDF。扫描 PDF 最多渲染 `MULTIMODAL_MAX_PAGES` 页；图片或页面以一次视觉请求发送，结果保留 `page`、归一化 `bbox`、连续文字 `quote`、来源哈希和 `source_ref`。每条结果状态固定为 `candidate`，前端核对前不会进入能力卡或职业推荐。
+
+前端上传普通文字 PDF 时只调用文字提取；检测到 PDF 没有文字层，或上传 PNG/JPG/WebP 时才调用一次 Qwen-VL。这样不会为同一份可复制文本重复支付视觉调用。旧版 `.doc` 和外部链接抓取仍不在支持范围。
 
 ## 12 个固定试路任务与动态选题
 
@@ -226,6 +237,38 @@ Qwen 只评价固定任务中的可观察行为。接口返回各 Rubric 的分�
 相同能力卡、岗位资料和任务选择结果会复用已经通过结构化校验的职业推荐；相同任务定义、作答和提示词版本会复用已经通过校验的任务评价。缓存保存在本机 `PROFILE_DB_PATH` 指定的 SQLite 文件中。单个会话的并发提交会串行处理，已提交会话直接返回原评价。Coach 提示只在用户主动点击时记录，不进入自动缓存调用。
 
 原 `A-02` 专用接口仍保留用于兼容已有本机会话，新主流程统一使用 `/trial/workbench/` 接口。
+
+## TrialAgent 评测、SFT 与低置信度校验
+
+评测数据与训练数据分开管理。训练记录必须是固定 12 个任务的人工审核 ChatML；脚本只校验格式和任务白名单，不生成训练标签。标注边界、输入 JSONL 格式和 SFT 分片命令见 [`datasets/trial_agent/v1/README.md`](datasets/trial_agent/v1/README.md)。生成目录已忽略，不会把训练产物提交到 Git。
+
+统一评测报告支持四组对照：`base_qwen`（基线 Qwen）、`prompt_hardened`（当前提示词）、`sft`（百炼部署后的 TrialAgent 微调模型）和 `sft_validator`（SFT 加证据校验链）。报告统计结构合法率、分项分数 MAE、Observed Level 准确率及 ±1 命中率、证据精确率/召回率、无效引用和平均 API 调用次数，并记录数据集哈希、模型、提示词版本和 Git 提交号。
+
+离线汇总不会调用模型：
+
+```bash
+conda activate before-choosing-demo
+python scripts/evaluate_trial_agent.py \
+  --cases datasets/trial_agent/eval/cases.example.jsonl \
+  --predictions datasets/trial_agent/eval/predictions.example.jsonl
+```
+
+Windows PowerShell：
+
+```powershell
+conda activate before-choosing-demo
+python .\scripts\evaluate_trial_agent.py `
+  --cases .\datasets\trial_agent\eval\cases.example.jsonl `
+  --predictions .\datasets\trial_agent\eval\predictions.example.jsonl
+```
+
+只有明确使用 `--live` 才会按案例和方案调用 Qwen。四组对照会产生 `4 × 案例数` 次 TrialAgent 请求；未设置 `TRIAL_SFT_MODEL` 时不会启动 SFT 组。报告输出到 `evaluation-results/trial-agent-v1/`，该目录已忽略。
+
+低置信度校验先在本机运行：检查 Rubric 是否完整、权重是否一致、证据引用是否属于服务端目录、分数是否有证据支撑以及证据覆盖率。命中任一条件时，评价会返回 `verification.status=needs_review` 和原因码；只有设置 `TRIAL_VERIFIER_MODEL` 才会再调用一次校验模型，且结果按答案与证据缓存，重复提交不会重复付费。校验模型不重新评分，也不能直接修改能力卡。
+
+### 百炼 SFT 操作边界
+
+`TRIAL_SFT_MODEL` 只填写已经在百炼完成训练并部署的模型 ID。代码负责准备 ChatML 数据、读取部署模型并做四组对照，不会在本机自动创建训练任务或上传含个人信息的数据。训练完成后把模型 ID 写入 `.env`，再使用锁定测试集生成报告。
 
 ## 本地岗位 RAG 与职业推演
 

@@ -18,9 +18,11 @@ from app.schemas.profile import (
     ProfileProposalRequest,
     ProfileProposalResponse,
 )
+from app.schemas.multimodal import MultimodalEvidenceResponse
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
 from app.services.material_extractor import MaterialExtractionError, extract_material_text
 from app.services.model_response_cache import ModelResponseCache
+from app.services.multimodal_evidence import MultimodalEvidenceExtractor, MultimodalExtractionError
 from app.services.profile_store import ProfileStore
 
 logger = logging.getLogger(__name__)
@@ -100,6 +102,36 @@ async def extract_profile_material(file: UploadFile = File(...)) -> MaterialExtr
         char_count=len(text),
         truncated=truncated,
     )
+
+
+@router.post(
+    "/materials/multimodal-extract",
+    response_model=MultimodalEvidenceResponse,
+)
+async def extract_profile_multimodal_evidence(
+    file: UploadFile = File(...),
+) -> MultimodalEvidenceResponse:
+    """Extract candidate page/region evidence with the configured Qwen-VL model."""
+
+    file_name = Path(file.filename or "upload").name
+    data = await file.read(MAX_MATERIAL_BYTES + 1)
+    content_type = file.content_type
+    await file.close()
+    if len(data) > MAX_MATERIAL_BYTES:
+        raise HTTPException(status_code=413, detail="材料文件不能超过 20MB。")
+    if not data:
+        raise HTTPException(status_code=422, detail="材料文件为空。")
+    try:
+        return await MultimodalEvidenceExtractor().extract(
+            file_name=file_name,
+            data=data,
+            mime_type=content_type,
+        )
+    except MultimodalExtractionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LLMGatewayError as exc:
+        logger.warning("multimodal evidence extraction failed: %s", exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/cards", response_model=ProfileCardsResponse)

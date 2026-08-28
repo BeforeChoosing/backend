@@ -4,6 +4,8 @@ from docx import Document
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.api import profile as profile_api
+from app.schemas.multimodal import MultimodalEvidenceItem, MultimodalEvidenceResponse
 
 
 def test_extract_text_material() -> None:
@@ -44,3 +46,36 @@ def test_reject_unsupported_material() -> None:
 
     assert response.status_code == 422
     assert "仅支持" in response.json()["detail"]
+
+
+def test_multimodal_extract_returns_candidate_region(monkeypatch) -> None:
+    class FakeExtractor:
+        async def extract(self, *, file_name, data, mime_type):
+            return MultimodalEvidenceResponse(
+                file_name=file_name,
+                file_sha256="a" * 64,
+                mime_type=mime_type or "image/png",
+                page_count=1,
+                model="qwen-vl-ocr",
+                items=[
+                    MultimodalEvidenceItem(
+                        id="mm:test:1:1",
+                        source_ref="material:test:page:1:region:1",
+                        page=1,
+                        bbox=[10, 20, 300, 400],
+                        label="项目行动",
+                        quote="我负责了用户访谈",
+                        confidence=0.9,
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(profile_api, "MultimodalEvidenceExtractor", FakeExtractor)
+    response = TestClient(app).post(
+        "/api/v1/profile/materials/multimodal-extract",
+        files={"file": ("evidence.png", b"image", "image/png")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["status"] == "candidate"
+    assert response.json()["items"][0]["page"] == 1

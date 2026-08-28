@@ -37,6 +37,14 @@ class Settings:
     dashscope_api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
     dashscope_base_url: str = _CHAT_URL
     qwen_model: str = os.getenv("QWEN_MODEL", "qwen-plus")
+    trial_base_model: str = os.getenv("TRIAL_BASE_MODEL", "")
+    trial_sft_model: str = os.getenv("TRIAL_SFT_MODEL", "")
+    trial_verifier_model: str = os.getenv("TRIAL_VERIFIER_MODEL", "")
+    trial_verifier_min_evidence_coverage: float = float(
+        os.getenv("TRIAL_VERIFIER_MIN_EVIDENCE_COVERAGE", "0.75")
+    )
+    bailian_vision_model: str = os.getenv("BAILIAN_VISION_MODEL", "qwen-vl-ocr")
+    multimodal_max_pages: int = int(os.getenv("MULTIMODAL_MAX_PAGES", "8"))
     request_timeout_seconds: float = float(os.getenv("LLM_REQUEST_TIMEOUT", "45"))
     profile_db_path: str = os.getenv("PROFILE_DB_PATH", "profile.db")
     knowledge_dir: str = os.getenv("KNOWLEDGE_DIR", "knowledge/public")

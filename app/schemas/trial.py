@@ -28,6 +28,7 @@ TrialEvidenceSource = Literal[
 ]
 TrialEvidenceKind = Literal["planned", "observed", "deliverable", "reference", "interaction"]
 TrialAbilityApplicationStatus = Literal["已应用", "部分应用", "未形成证据"]
+TrialVerificationStatus = Literal["accepted", "needs_review", "repaired"]
 
 
 class A02Metric(BaseModel):
@@ -162,6 +163,20 @@ class TrialAbilityEvidence(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list, max_length=8)
 
 
+class TrialVerification(BaseModel):
+    """Deterministic gate applied after a TrialAgent response."""
+
+    status: TrialVerificationStatus = "accepted"
+    triggered: bool = False
+    reason_codes: list[str] = Field(default_factory=list, max_length=12)
+    evidence_coverage: float = Field(default=0.0, ge=0, le=1)
+    invalid_evidence_ref_count: int = Field(default=0, ge=0)
+    missing_dimension_count: int = Field(default=0, ge=0)
+    score_without_evidence_count: int = Field(default=0, ge=0)
+    model_reviewed: bool = False
+    review_summary: str = Field(default="", max_length=600)
+
+
 class TrialEvaluation(BaseModel):
     summary: str = Field(max_length=600)
     dimensions: list[TrialDimensionEvaluation] = Field(max_length=8)
@@ -177,6 +192,7 @@ class TrialEvaluation(BaseModel):
     confidence: Literal["低", "中", "高"]
     evidence_refs: list[str] = Field(default_factory=list, max_length=12)
     ability_applications: list[TrialAbilityApplication] = Field(default_factory=list, max_length=12)
+    verification: TrialVerification | None = None
     evaluation_protocol: str = "trial-evidence-v1"
 
 
