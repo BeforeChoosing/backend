@@ -250,6 +250,17 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
     assert evidence["observed_level"] == "L3"
     assert evidence["primary_ability"] == "用户洞察"
     assert evidence["coach_dependency"] == "方向性提示"
+    assert evidence["selected_card_ids"] == ["trial-card-1"]
+    assert {item["id"] for item in evidence["evidence_items"]} >= {
+        "card:trial-card-1",
+        "answer:problem",
+        "event:decision",
+    }
+    evaluation = submitted.json()["evaluation"]
+    assert evaluation["evaluation_protocol"] == "trial-evidence-v1"
+    assert evaluation["ability_applications"][0]["card_id"] == "trial-card-1"
+    assert evaluation["ability_applications"][0]["status"] == "未形成证据"
+    assert evaluation["dimensions"][0]["evidence_refs"]
     assert evidence["reflection"]["generation_mode"] == "deterministic_fallback"
     assert evidence["reflection"]["changes"][0]["change_type"] == "仍待验证"
     assert profile_store.get_completed_task_ids() == ["F-01"]

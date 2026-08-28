@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 from datetime import datetime, timezone
 
@@ -12,6 +13,7 @@ from app.schemas.trial import (
     A02Task,
     ObservedEvidence,
     ReflectionProposal,
+    TrialEvidenceBundle,
     TrialAnswerUpdateRequest,
     TrialEvaluation,
     TrialSession,
@@ -36,6 +38,7 @@ from app.services.model_response_cache import ModelResponseCache
 from app.services.profile_store import ProfileStore
 from app.services.trial_store import TrialStore
 from app.services.task_selector import recommend_trial_task
+from app.services.trial_scoring import TrialScoringService
 from app.tasks.a02 import A02_TASK
 from app.tasks.catalog import get_task_definition, list_task_definitions
 
@@ -173,7 +176,24 @@ async def submit_dynamic_trial_session(session_id: str) -> DynamicTrialSession:
         )
         task = get_task_definition(session.task_id)
         try:
-            evaluation = await _evaluate_dynamic_cached(task, session.answer)
+            cards = profile_store.get_cards_by_ids(session.answer.selected_card_ids)
+            evidence_bundle = TrialScoringService.build_evidence(
+                task,
+                session.answer,
+                cards,
+            )
+            evaluation = await _evaluate_dynamic_cached(
+                task,
+                session.answer,
+                cards,
+                evidence_bundle,
+            )
+            evaluation, evidence_bundle = TrialScoringService.finalize_dynamic(
+                task,
+                session.answer,
+                cards,
+                evaluation,
+            )
             reflection = await _create_reflection(
                 task,
                 session.answer,
@@ -184,6 +204,7 @@ async def submit_dynamic_trial_session(session_id: str) -> DynamicTrialSession:
                 session,
                 evaluation,
                 reflection,
+                evidence_bundle,
             )
             submitted = _dynamic_trial_store().submit(session_id, observed_evidence, evaluation)
             profile_store.record_observed_evidence(session_id, observed_evidence, evaluation)
@@ -199,6 +220,8 @@ async def submit_dynamic_trial_session(session_id: str) -> DynamicTrialSession:
 async def _evaluate_dynamic_cached(
     task: TrialTaskDefinition,
     answer: DynamicTrialAnswer,
+    cards,
+    evidence_bundle: TrialEvidenceBundle,
 ) -> TrialEvaluation:
     namespace = "dynamic-trial-evaluation"
     cache_key = ModelResponseCache.fingerprint(
@@ -207,6 +230,7 @@ async def _evaluate_dynamic_cached(
             "model": get_settings().qwen_model,
             "task": task.model_dump(mode="json"),
             "answer": _dynamic_answer_cache_payload(answer),
+            "cards": [card.model_dump(mode="json") for card in cards],
         }
     )
     lock = _model_call_locks.setdefault((namespace, cache_key), asyncio.Lock())
@@ -218,7 +242,17 @@ async def _evaluate_dynamic_cached(
             except ValueError:
                 logger.warning("discarding invalid cached dynamic trial evaluation")
 
-        evaluation = await _trial_agent().evaluate_dynamic(task, answer)
+        agent = _trial_agent()
+        evaluator = agent.evaluate_dynamic
+        parameters = inspect.signature(evaluator).parameters
+        if "evidence_bundle" in parameters:
+            evaluation = await evaluator(task, answer, cards, evidence_bundle)
+        elif "cards" in parameters:
+            evaluation = await evaluator(task, answer, cards)
+        else:
+            # Keep test doubles and older local agents compatible while the
+            # production agent receives the complete evidence catalog.
+            evaluation = await evaluator(task, answer)
         _model_cache().set(
             namespace,
             cache_key,
@@ -358,19 +392,20 @@ def _dynamic_observed_evidence(
     session: DynamicTrialSession,
     evaluation,
     reflection: ReflectionProposal,
+    evidence_bundle: TrialEvidenceBundle,
 ) -> ObservedEvidence:
     task = get_task_definition(session.task_id)
     return ObservedEvidence(
         task_id=task.id,
         statement=f"用户完成了 {task.id}《{task.title}》的五步试路任务和事件后重新决策。",
         completed_steps=[step.title for step in task.steps],
-        evidence_refs=session.answer.evidence_refs or [
-            step.id for step in task.steps if session.answer.step_answers.get(step.id, "").strip()
-        ],
+        evidence_refs=evidence_bundle.evidence_refs,
         caveats=[
             "这次任务只记录本次表现，不代表长期能力或岗位认证。",
             "任务情境和业务数字都是练习材料。",
         ],
+        evidence_items=evidence_bundle.items,
+        selected_card_ids=evidence_bundle.selected_card_ids,
         primary_ability=evaluation.primary_ability,
         observed_level=evaluation.observed_level,
         level_reason=evaluation.level_reason,
