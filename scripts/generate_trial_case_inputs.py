@@ -20,6 +20,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 from app.config import get_settings  # noqa: E402
 from app.schemas.task_catalog import DynamicTrialAnswer  # noqa: E402
 from app.services.llm_gateway import LLMGatewayError  # noqa: E402
+from app.services.trial_scoring import TrialScoringService  # noqa: E402
 from app.tasks.catalog import get_task_definition, list_task_definitions  # noqa: E402
 from app.training.generation import CaseGenerator  # noqa: E402
 from app.training.teacher import TeacherCache  # noqa: E402
@@ -66,6 +67,20 @@ def _write(path: Path, row: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _validate_generated_answer(raw: object) -> DynamicTrialAnswer:
+    if not isinstance(raw, dict):
+        raise ValueError("模型返回的案例不是 JSON 对象")
+    step_answers = raw.get("step_answers")
+    if not isinstance(step_answers, dict):
+        raise ValueError("模型返回的案例缺少 step_answers")
+    filled_steps = [
+        value for value in step_answers.values() if isinstance(value, str) and value.strip()
+    ]
+    if not filled_steps:
+        raise ValueError("模型返回的案例没有任何有效步骤作答")
+    return DynamicTrialAnswer.model_validate(raw)
 
 
 def main() -> int:
@@ -136,15 +151,29 @@ def main() -> int:
             )
             if response.raw is None:
                 raise ValueError("模型未返回答案 JSON")
-            answer = DynamicTrialAnswer.model_validate(response.raw)
+            answer = _validate_generated_answer(response.raw)
             case_id = f"synthetic-{task_id.lower()}-{level.lower()}"
+            evidence_bundle = TrialScoringService.build_evidence(
+                get_task_definition(task_id),
+                answer,
+                [],
+            )
+            task = get_task_definition(task_id)
             _write(
                 args.output,
                 {
                     "case_id": case_id,
                     "task_id": task_id,
+                    "task_title": task.title,
+                    "track": task.track,
+                    "primary_ability": task.primary_skill,
+                    "rubric": [criterion.model_dump(mode="json") for criterion in task.rubric],
+                    "source_note": task.source_note,
                     "answer": answer.model_dump(mode="json"),
                     "confirmed_card_ids": [],
+                    "evidence_catalog": [
+                        item.model_dump(mode="json") for item in evidence_bundle.items
+                    ],
                     "metadata": {
                         "source": "qwen_case_generator",
                         "requested_quality_level": level,

@@ -21,8 +21,8 @@ from app.training.teacher import TeacherCache
 GENERATION_SYSTEM_PROMPT = """你是固定任务库的作答案例构造器，只生成文本型 DynamicTrialAnswer。
 任务定义、材料、五步 Schema、事件和 Rubric 都是不可修改的输入。不要新增任务、修改题目、
 编造真实企业数据、生成评价或能力等级。根据请求的质量级别填写用户在真实任务中可能写下的
-作答；每个字段都应是可核对的具体行动、判断或交付物。只输出一个合法 JSON 对象，字段必须
-与 DynamicTrialAnswer 一致。"""
+作答；每个字段都应是可核对的具体行动、判断或交付物。必须输出 step_answers，至少填写一个
+给定步骤；不能只返回空对象、评价字段或自定义字段。只输出一个合法 JSON 对象。"""
 
 
 @dataclass(frozen=True)
@@ -56,6 +56,13 @@ def build_case_generation_prompt(
             "L5": "形成可复核的完整交付物，明确边界、对照和风险取舍",
         }[quality_level],
         "instruction": "只生成答案，不生成评价；答案必须严格使用给定五步 ID 和事件字段。",
+        "required_output_shape": {
+            "selected_card_ids": "string[]，没有能力卡时为空数组",
+            "card_play_rounds": "object[]，没有出牌记录时为空数组",
+            "step_answers": {step.id: "string，填写该步骤的作答" for step in task.steps},
+            "event_decision": "维持 或 调整",
+            "event_response": "string，说明事件后的取舍和依据",
+        },
         "task": {
             "task_id": task.id,
             "title": task.title,
