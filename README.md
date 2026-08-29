@@ -191,7 +191,11 @@ python .\scripts\check_demo.py --live-rag
 
 ## 01 能力探索与候选卡
 
-`POST /api/v1/profile/exploration/messages` 使用当前经历草稿和最多 12 条补充对话生成一条聚焦引导。接口由 `ProfileAgent` 处理，只记录用户已经陈述的证据，把尚未证实的内容标记为潜能假设，不会直接写入个人画像。输入、历史记录、模型和提示词版本完全相同时复用本机缓存，不重复调用百炼。
+`POST /api/v1/profile/exploration/messages` 使用当前经历草稿和最多 12 条补充对话生成一条聚焦引导。接口由 `ProfileAgent` 负责自然表达和候选事实整理；是否继续追问、是否达到候选卡整理条件由后端证据覆盖控制器确定，不由模型结果直接决定。
+
+控制器只读取 `experience_text` 和 `role=user` 的历史消息，排除助手文本，按以下七个维度计算覆盖状态：`ownership`（本人承担）、`decision`（判断依据）、`constraint`（限制条件）、`collaboration`（协作过程）、`result`（实际结果）、`transfer`（后续迁移）和 `evidence`（可核对材料）。每个维度返回 `missing`、`weak` 或 `sufficient`；`confirmed` 只在用户确认候选能力卡后成立，不由探索接口写入。服务端要求本人行动、判断依据、结果和可核对证据达到 `sufficient`，并至少出现一类协作或限制信息，才将 `ready_for_proposal` 置为 `true`。响应中的 `coverage` 可直接用于前端展示覆盖进度。
+
+请求可选传入已聚焦过的 `focus_history`，控制器会在仍有其他缺口时跳过这些维度，避免连续重复同一补充方向。旧版前端不传该字段时仍保持兼容，覆盖状态和完成条件照常由服务端重算。模型每轮仍只调用一次，响应缓存键包含覆盖控制版本相关输入，不会因控制器判断而增加固定调用。
 
 完成补充后调用候选卡接口：
 

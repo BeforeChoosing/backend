@@ -129,3 +129,25 @@ def test_profile_exploration_reuses_identical_model_result(tmp_path, monkeypatch
     assert second.status_code == 200
     assert first.json() == second.json()
     assert agent.calls == 1
+
+
+def test_profile_exploration_server_owns_focus_and_readiness(tmp_path, monkeypatch):
+    store = ProfileStore(tmp_path / "profile.db")
+    agent = _FakeProfileExplorationAgent()
+    monkeypatch.setattr(profile_api, "_profile_store", lambda: store)
+    monkeypatch.setattr(profile_api, "_profile_agent", lambda: agent)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/profile/exploration/messages",
+        json={
+            "experience_text": "我在校园项目中负责整理需求并完成一版可用原型。",
+            "request_id": "request-explore-controller",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["focus_dimension"] == "decision"
+    assert payload["ready_for_proposal"] is False
+    assert payload["coverage"]["decision"] == "missing"

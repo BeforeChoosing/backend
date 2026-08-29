@@ -23,6 +23,10 @@ from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
 from app.services.material_extractor import MaterialExtractionError, extract_material_text
 from app.services.model_response_cache import ModelResponseCache
 from app.services.multimodal_evidence import MultimodalEvidenceExtractor, MultimodalExtractionError
+from app.services.profile_exploration_controller import (
+    CONTROLLER_VERSION,
+    apply_exploration_controller,
+)
 from app.services.profile_store import ProfileStore
 
 logger = logging.getLogger(__name__)
@@ -51,9 +55,11 @@ async def create_profile_exploration_message(
     cache_key = ModelResponseCache.fingerprint(
         {
             "prompt_version": ProfileAgent.EXPLORATION_PROMPT_VERSION,
+            "controller_version": CONTROLLER_VERSION,
             "model": get_settings().qwen_model,
             "experience_text": request.experience_text,
             "messages": [message.model_dump(mode="json") for message in request.messages],
+            "focus_history": request.focus_history,
             "target_role": request.target_role,
             "existing_card_titles": request.existing_card_titles,
         }
@@ -68,7 +74,10 @@ async def create_profile_exploration_message(
                 logger.warning("discarding invalid cached profile exploration")
         trace_id = uuid4().hex
         try:
-            response = await _profile_agent().explore(request, trace_id)
+            response = apply_exploration_controller(
+                await _profile_agent().explore(request, trace_id),
+                request,
+            )
             _model_cache().set(
                 "profile-exploration",
                 cache_key,
