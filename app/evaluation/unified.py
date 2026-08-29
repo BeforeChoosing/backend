@@ -53,7 +53,11 @@ def render_unified_markdown(report: dict[str, Any]) -> str:
     lines = ["# 统一评测报告", "", f"生成时间：`{report.get('generated_at', '')}`", ""]
     trial = sections.get("trial")
     if trial:
-        lines += ["## TrialAgent 评价", "", "详见嵌入的 trial 报告指标。", ""]
+        arms = trial.get("arms", [])
+        lines += ["## TrialAgent 评价", "", "| 方案 | 样本数 | Schema 合法率 | 分项 MAE | 证据精确率 | 证据召回率 |", "|---|---:|---:|---:|---:|---:|"]
+        for arm in arms:
+            lines.append(f"| {arm.get('arm')} | {arm.get('case_count', '—')} | {arm.get('valid_schema_rate', '—')} | {arm.get('dimension_score_mae', '—')} | {arm.get('evidence_precision', '—')} | {arm.get('evidence_recall', '—')} |")
+        lines.append("")
     rag = sections.get("rag")
     if rag:
         before = rag.get("before", {})
@@ -64,7 +68,7 @@ def render_unified_markdown(report: dict[str, Any]) -> str:
         lines.append("")
     multimodal = sections.get("multimodal")
     if multimodal:
-        metrics = multimodal.get("metrics", multimodal)
+        metrics = multimodal.get("summary", multimodal.get("metrics", multimodal))
         lines += ["## 多模态证据定位", "", "| 指标 | 值 |", "|---|---:|"]
         for key in ("page_hit_rate", "localization_iou", "evidence_precision", "evidence_recall", "material_coverage"):
             if key in metrics:

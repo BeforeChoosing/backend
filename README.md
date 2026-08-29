@@ -292,6 +292,28 @@ python .\scripts\evaluate_trial_agent.py `
 
 `TRIAL_SFT_MODEL` 只填写已经在百炼完成训练并部署的模型 ID。代码负责准备 ChatML 数据、读取部署模型并做四组对照，不会在本机自动创建训练任务或上传含个人信息的数据。训练完成后把模型 ID 写入 `.env`，再使用锁定测试集生成报告。
 
+从已审核的 DPO 对中抽取锁定评测集时，使用独立输出文件；抽取结果仅用于评测，不得回流 SFT 或 DPO 训练：
+
+```bash
+conda activate before-choosing-demo
+python scripts/extract_locked_trial_cases.py \
+  --input datasets/trial_agent/v1/sol_dpo_pairs.local.jsonl \
+  --output datasets/trial_agent/eval/locked_cases.v1.jsonl \
+  --per-task 2
+```
+
+Windows PowerShell：
+
+```powershell
+conda activate before-choosing-demo
+python .\scripts\extract_locked_trial_cases.py `
+  --input .\datasets\trial_agent\v1\sol_dpo_pairs.local.jsonl `
+  --output .\datasets\trial_agent\eval\locked_cases.v1.jsonl `
+  --per-task 2
+```
+
+该锁定集当前为待人工抽检版本，正式提交评测前应复核其 `gold` 标签并固定数据版本。
+
 ### 教师生成、异常抽检与数据导出
 
 案例生成和教师评价均提供本地 SQLite 缓存。相同任务、质量级别、模型和 Prompt 版本只产生一次 API 请求；`--dry-run` 只检查输入和打印计划，不调用百炼。
