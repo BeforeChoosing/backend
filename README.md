@@ -505,10 +505,29 @@ RAG v2 的检索链路回归不需要百炼调用，覆盖查询拆分、批量�
 conda run -n before-choosing-demo pytest -q tests/test_query_planner.py tests/test_hybrid_retriever.py tests/test_career_api.py
 ```
 
+使用已有查询向量执行纯向量与 RAG v2 的同口径对比，报告写入 `evaluation-results/rag-v2/`；若缓存缺失，离线命令会直接退出，不会偷偷调用百炼：
+
+```bash
+conda run -n before-choosing-demo python scripts/evaluate_rag_v2.py
+```
+
+需要补齐缺失查询向量时，必须显式增加 `--live`：
+
+```bash
+conda run -n before-choosing-demo python scripts/evaluate_rag_v2.py --live
+```
+
 Windows PowerShell：
 
 ```powershell
 conda run -n before-choosing-demo pytest -q tests/test_query_planner.py tests/test_hybrid_retriever.py tests/test_career_api.py
+conda run -n before-choosing-demo python .\scripts\evaluate_rag_v2.py
+```
+
+需要补齐缺失查询向量时：
+
+```powershell
+conda run -n before-choosing-demo python .\scripts\evaluate_rag_v2.py --live
 ```
 
 验证自适应路由时使用独立脚本。默认离线读取缓存，不产生费用；增加 `--live` 后，仅对低置信度查询调用配置的 Rerank，并将结果写入本地缓存：
