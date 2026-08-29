@@ -166,9 +166,16 @@ async def run_live_evaluation(
     *,
     settings: Settings | None = None,
     arms: tuple[TrialArm, ...] = ("base_qwen", "prompt_hardened", "sft", "sft_validator"),
+    case_offset: int = 0,
+    case_limit: int | None = None,
 ) -> EvaluationReport:
     settings = settings or get_settings()
     cases = load_evaluation_cases(cases_path)
+    if case_offset < 0:
+        raise ValueError("case_offset 不能为负数")
+    cases = cases[case_offset : case_offset + case_limit if case_limit is not None else None]
+    if not cases:
+        raise ValueError("指定的评测切片为空")
     grouped: dict[str, list] = {}
     skipped_arms: list[TrialArm] = []
     active_arms: list[TrialArm] = []

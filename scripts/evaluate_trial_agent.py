@@ -27,6 +27,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cases", required=True, type=Path, help="评测集 JSONL")
     parser.add_argument("--predictions", type=Path, help="离线预测结果 JSONL；不传则必须使用 --live")
     parser.add_argument("--live", action="store_true", help="显式调用百炼 Qwen，按每个 arm/案例调用一次")
+    parser.add_argument("--offset", type=int, default=0, help="实时评测起始案例序号（从 0 开始）")
+    parser.add_argument("--limit", type=int, help="实时评测案例数量；适合小批次运行")
     parser.add_argument("--output-dir", type=Path, default=Path("evaluation-results/trial-agent-v1"))
     return parser.parse_args()
 
@@ -41,7 +43,7 @@ def main() -> int:
         return 2
     try:
         if args.live:
-            report = asyncio.run(run_live_evaluation(args.cases))
+            report = asyncio.run(run_live_evaluation(args.cases, case_offset=args.offset, case_limit=args.limit))
         else:
             report = run_offline_evaluation(args.cases, load_prediction_records(args.predictions))
         json_path = write_json(report, args.output_dir / "report.json")
