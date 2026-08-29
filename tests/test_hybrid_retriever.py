@@ -289,14 +289,14 @@ def test_multi_query_retrieval_batches_embeddings_and_reports_coverage(tmp_path)
 
     calls_before = len(embedding.calls)
     first = hybrid.search_many(
-        ["AI 产品经理 用户研究", "AI 产品经理 模型评测"],
+        ["AI 产品经理 岗位职责", "AI 产品经理 用户研究", "AI 产品经理 模型评测"],
         corpus="career",
         document_id="job-ai-product-manager-v1",
         limit=2,
     )
     calls_after_first = len(embedding.calls)
     second = hybrid.search_many(
-        ["AI 产品经理 用户研究", "AI 产品经理 模型评测"],
+        ["AI 产品经理 岗位职责", "AI 产品经理 用户研究", "AI 产品经理 模型评测"],
         corpus="career",
         document_id="job-ai-product-manager-v1",
         limit=2,
@@ -305,8 +305,9 @@ def test_multi_query_retrieval_batches_embeddings_and_reports_coverage(tmp_path)
     assert len(first) == len(second) == 2
     assert calls_after_first == calls_before + 1
     assert len(embedding.calls) == calls_after_first
+    assert {chunk.heading_path[-1] for chunk in first} == {"用户研究", "技术落地"}
     assert hybrid.last_diagnostics["mode"] == "multi-query-vector"
-    assert hybrid.last_diagnostics["query_count"] == 2
+    assert hybrid.last_diagnostics["query_count"] == 3
     assert hybrid.last_diagnostics["embedding_batch_calls"] == 0
     assert hybrid.last_diagnostics["query_coverage"] == 1.0
-    assert len(hybrid.last_diagnostics["per_query_result_ids"]) == 2
+    assert len(hybrid.last_diagnostics["per_query_result_ids"]) == 3

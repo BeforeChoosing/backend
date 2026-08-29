@@ -475,25 +475,37 @@ class HybridKnowledgeRetriever:
 
         by_id = {chunk.id: chunk for chunk in candidates}
         fused: dict[str, float] = {chunk.id: 0.0 for chunk in candidates}
-        lexical_weight = 0.45
+        has_vectors = any(vector_lists)
+        lexical_weight = 0.05 if has_vectors else 1.0
         vector_weight = 1.0
-        for query, lexical, vector_hits in zip(queries, lexical_lists, vector_lists):
+        for query_index, (query, lexical, vector_hits) in enumerate(
+            zip(queries, lexical_lists, vector_lists)
+        ):
+            # The first query is the broad role anchor.  It contributes recall
+            # but must not drown out the card-specific intents that follow it.
+            intent_weight = 0.05 if query_index == 0 else 1.0
+            lexical_intent_weight = (
+                0.02 if has_vectors and query_index == 0 else lexical_weight
+            )
             for rank, chunk in enumerate(vector_hits, start=1):
                 if chunk.chunk_id in fused:
-                    fused[chunk.chunk_id] += vector_weight / (60.0 + rank)
+                    fused[chunk.chunk_id] += intent_weight * vector_weight / (60.0 + rank)
             for rank, chunk in enumerate(lexical, start=1):
                 if chunk.id in fused:
-                    fused[chunk.id] += lexical_weight / (60.0 + rank)
-            query_terms = _tokenize(query)
-            for chunk_id, value in list(fused.items()):
-                chunk = by_id[chunk_id]
-                heading_terms = _tokenize(" ".join(chunk.heading_path))
-                if query_terms and query_terms.intersection(heading_terms):
-                    fused[chunk_id] = value + 0.008
+                    fused[chunk.id] += lexical_intent_weight / (60.0 + rank)
 
         ordered = sorted(fused, key=lambda chunk_id: (-fused[chunk_id], chunk_id))
         ranked = [replace(by_id[chunk_id], score=fused[chunk_id]) for chunk_id in ordered]
-        return cls._mmr_select(ranked, limit=limit)
+        # Keep one semantic winner for every focused intent.  The first query
+        # is the broad role anchor; the following queries represent concrete
+        # ability cards and must retain at least one citation each whenever
+        # the result budget allows it.
+        pinned_ids = [
+            vector_hits[0].chunk_id
+            for vector_hits in vector_lists[1:]
+            if vector_hits
+        ]
+        return cls._mmr_select(ranked, limit=limit, pinned_ids=pinned_ids)
 
     @classmethod
     def _mmr_select(
@@ -502,6 +514,7 @@ class HybridKnowledgeRetriever:
         *,
         limit: int,
         relevance_weight: float = 0.82,
+        pinned_ids: Sequence[str] = (),
     ) -> list[KnowledgeChunk]:
         if len(candidates) <= limit:
             return list(candidates)
@@ -509,8 +522,10 @@ class HybridKnowledgeRetriever:
         minimum = min(scores, default=0.0)
         maximum = max(scores, default=1.0)
         denominator = max(1e-9, maximum - minimum)
-        remaining = list(candidates)
-        selected: list[KnowledgeChunk] = []
+        pinned = set(pinned_ids)
+        selected = [chunk for chunk in candidates if chunk.id in pinned][:limit]
+        selected_ids = {chunk.id for chunk in selected}
+        remaining = [chunk for chunk in candidates if chunk.id not in selected_ids]
         while remaining and len(selected) < limit:
             def mmr_score(chunk: KnowledgeChunk) -> tuple[float, float, str]:
                 relevance = (chunk.score - minimum) / denominator
