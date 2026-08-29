@@ -1,34 +1,28 @@
 [
-  {
-    "query": "AI 产品经理需要哪些传统产品能力",
-    "expected_heading": "传统PM基本功"
-  },
-  {
-    "query": "大模型产品经理需要掌握 RAG、Agent 和模型评测吗",
-    "expected_heading": "AI技术素养"
-  },
-  {
-    "query": "AI 产品从 0 到 1 上线需要什么落地能力",
-    "expected_heading": "落地交付力"
-  },
-  {
-    "query": "AI 产品经理需要哪些软性素质",
-    "expected_heading": "软性素质"
-  },
-  {
-    "query": "校招 AI 产品经理应该怎样准备",
-    "expected_heading": "给大学生的对照指南"
-  },
-  {
-    "query": "AI 产品经理的典型工作有哪些",
-    "expected_heading": "典型工作"
-  },
-  {
-    "query": "不同岗位层级对 AI 产品经理的技术要求",
-    "expected_heading": "按岗位层级的能力侧重"
-  },
-  {
-    "query": "Prompt 工程和 Agent 工作流的发展趋势",
-    "expected_heading": "关键趋势"
-  }
+  {"query":"AI 产品经理的能力结构由哪些部分组成","expected_heading":"一、能力全景"},
+  {"query":"传统产品能力、AI 技术和落地能力之间是什么关系","expected_heading":"一、能力全景"},
+  {"query":"AI 产品经理需要做用户调研、需求分析和 PRD 吗","expected_heading":"二、传统PM基本功（10/10 JD提及）"},
+  {"query":"AI 产品岗位的项目推进和数据分析要求是什么","expected_heading":"二、传统PM基本功（10/10 JD提及）"},
+  {"query":"大模型产品经理需要掌握 RAG、Agent 和模型评测吗","expected_heading":"三、AI技术素养（9/10 JD提及）"},
+  {"query":"AI 产品经理如何理解大模型的能力边界","expected_heading":"三、AI技术素养（9/10 JD提及）"},
+  {"query":"校招 AI 产品经理需要了解哪些大模型概念","expected_heading":"基础层（校招/实习及格线）"},
+  {"query":"实习生需要掌握 RAG、Agent 和 Prompt 到什么程度","expected_heading":"基础层（校招/实习及格线）"},
+  {"query":"社招 AI 产品经理如何设计模型效果评测体系","expected_heading":"进阶层（社招1-3年要求）"},
+  {"query":"AI 产品经理的 Agent 工作流和数据飞轮能力有哪些要求","expected_heading":"进阶层（社招1-3年要求）"},
+  {"query":"资深 AI 产品经理需要理解 SFT 和模型对齐吗","expected_heading":"专家层（3-5年+高薪岗要求）"},
+  {"query":"专家级 AI 产品经理如何判断应该使用 RAG 还是微调","expected_heading":"专家层（3-5年+高薪岗要求）"},
+  {"query":"哪些 JD 信号可以判断是真正的 AI 产品经理岗位","expected_heading":"判断真AI PM岗的标准"},
+  {"query":"模型评估、badcase 和数据标注在岗位判断中有什么意义","expected_heading":"判断真AI PM岗的标准"},
+  {"query":"AI 产品从 0 到 1 上线需要哪些交付能力","expected_heading":"四、落地交付力（8/10 JD强调）"},
+  {"query":"如何用 ROI 和用户满意度验证 AI 产品效果","expected_heading":"四、落地交付力（8/10 JD强调）"},
+  {"query":"AI 产品经理为什么要具备 Builder 心态","expected_heading":"五、软性素质（贯穿所有JD）"},
+  {"query":"AI 产品岗位反复强调学习能力和问题拆解能力的原因","expected_heading":"五、软性素质（贯穿所有JD）"},
+  {"query":"校招、社招和专家级 AI 产品岗位分别看重什么","expected_heading":"六、按岗位层级的能力侧重"},
+  {"query":"不同工作年限的 AI 产品经理技术要求有什么差异","expected_heading":"六、按岗位层级的能力侧重"},
+  {"query":"AI 产品经理日常要如何挖掘业务场景","expected_heading":"七、典型工作"},
+  {"query":"AI 产品经理如何协同算法和工程团队推动产品上线","expected_heading":"七、典型工作"},
+  {"query":"大学生做过 AI API 项目可以对应哪些岗位要求","expected_heading":"八、给大学生的对照指南"},
+  {"query":"有用户访谈和竞品分析经历的学生如何对标 AI 产品岗位","expected_heading":"八、给大学生的对照指南"},
+  {"query":"Prompt 工程在 AI 产品经理岗位中的要求如何变化","expected_heading":"九、关键趋势"},
+  {"query":"为什么 AI 产品经理需要从会用 AI 转向设计 AI 系统","expected_heading":"九、关键趋势"}
 ]

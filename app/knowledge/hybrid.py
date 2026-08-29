@@ -103,6 +103,33 @@ class HybridKnowledgeRetriever:
             }
             return []
 
+        # The expanded 26-query evaluation favors the local semantic vector
+        # ranking. In vector mode, avoid an additional paid rerank request and
+        # return the cached local cosine order, with lexical candidates only
+        # filling a short result set when necessary.
+        retriever_mode = str(getattr(self.settings, "rag_retriever_mode", "hybrid")).lower()
+        if vector_hits and retriever_mode in {"vector", "semantic", "vector_only"}:
+            by_id = {chunk.id: chunk for chunk in candidates}
+            vector_ranked = [
+                replace(by_id[hit.chunk_id], score=hit.score)
+                for hit in vector_hits
+                if hit.chunk_id in by_id
+            ]
+            seen_ids = {chunk.id for chunk in vector_ranked}
+            if len(vector_ranked) < bounded_limit:
+                vector_ranked.extend(
+                    replace(chunk, score=chunk.score)
+                    for chunk in lexical
+                    if chunk.id not in seen_ids
+                )
+            self.last_diagnostics = {
+                "mode": "vector",
+                "vector_used": True,
+                "rerank_used": False,
+                "vector_error": vector_error,
+            }
+            return vector_ranked[:bounded_limit]
+
         reranked = self._try_rerank(normalized_query, candidates, bounded_limit)
         if reranked is not None:
             self.last_diagnostics = {

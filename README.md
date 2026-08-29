@@ -68,7 +68,7 @@ BAILIAN_RERANK_URL=
 BAILIAN_RERANK_MODEL=qwen3-rerank
 BAILIAN_VISION_MODEL=qwen-vl-ocr
 MULTIMODAL_MAX_PAGES=8
-RAG_RETRIEVER_MODE=hybrid
+RAG_RETRIEVER_MODE=vector
 RAG_CANDIDATE_LIMIT=20
 RAG_RERANK_LIMIT=5
 LLM_REQUEST_TIMEOUT=45
@@ -447,7 +447,7 @@ python scripts/export_trial_teacher_dataset.py \
 
 ## 本地岗位 RAG 与职业推演
 
-职业探索页只读取已确认能力卡。后端将能力卡内容与本地岗位资料组合成检索词，先用 SQLite FTS5 召回，再用百炼 `qwen3.7-text-embedding` 生成查询向量，在本地 SQLite 向量表中做余弦检索，最后用百炼 `qwen3-rerank` 对候选片段重排，再把带引用 ID 的片段交给 Qwen 生成结构化推演。前端不会直接请求百炼，也不会接触 API Key。
+职业探索页只读取已确认能力卡。后端将能力卡内容与本地岗位资料组合成检索词，使用百炼 `qwen3.7-text-embedding` 生成查询向量，在本地 SQLite 向量表中做余弦检索，再把带引用 ID 的片段交给 Qwen 生成结构化推演。当前 `RAG_RETRIEVER_MODE=vector` 是扩展评测集上的默认策略；`hybrid` 可切换到 SQLite FTS5 + 向量融合 + `qwen3-rerank` 对照链路。前端不会直接请求百炼，也不会接触 API Key。
 
 模型选择依据：岗位资料是文本，使用 `qwen3.7-text-embedding`，避免引入视觉模型或本地模型文件；重排使用同属 Qwen 系列的 `qwen3-rerank`，保持与比赛技术基础一致。若当前百炼工作空间仍提供 `gte-rerank-v2`，可将 `BAILIAN_RERANK_MODEL` 改为该值，接口协议不变。
 
@@ -473,7 +473,7 @@ Windows PowerShell：
 conda run -n before-choosing-demo python .\scripts\build_vector_index.py
 ```
 
-向量索引写入 `KNOWLEDGE_DB_PATH` 指定的本机 SQLite 文件，未建立向量索引时系统仍可使用 FTS5；远端 Embedding 或 Rerank 暂时不可用时，职业推演会保留确定性的本地检索结果。
+向量索引写入 `KNOWLEDGE_DB_PATH` 指定的本机 SQLite 文件，未建立向量索引时系统仍可使用 FTS5；远端 Embedding 暂时不可用时，职业推演会保留确定性的本地检索结果。扩展 26 条查询后，纯向量 Hit@5=100%、MRR@5=94.6%，融合 + 重排 Hit@5=96.2%、MRR@5=87.8%，因此正式默认选择纯向量；融合 + 重排仍保留为可配置对照方案。
 
 职业推演接口：
 

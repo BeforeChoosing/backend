@@ -152,3 +152,30 @@ def test_hybrid_retriever_keeps_deterministic_fallback_when_rerank_fails(tmp_pat
     assert len(results) == 2
     assert hybrid.last_diagnostics["mode"] == "hybrid"
     assert hybrid.last_diagnostics["rerank_used"] is False
+
+
+def test_vector_mode_uses_local_semantic_order_without_rerank(tmp_path):
+    retriever = _retriever(tmp_path)
+    settings = SimpleNamespace(**vars(_settings()), rag_retriever_mode="vector")
+    embedding = _FakeEmbeddingGateway()
+    VectorIndexBuilder(
+        retriever,
+        embedding,
+        model=settings.bailian_embedding_model,
+        dimension=settings.bailian_embedding_dimension,
+    ).build()
+    rerank = _FailingRerankGateway()
+    hybrid = HybridKnowledgeRetriever(
+        retriever.source_dir,
+        retriever.db_path,
+        settings=settings,
+        embedding_gateway=embedding,
+        rerank_gateway=rerank,
+        cache=ModelResponseCache(retriever.db_path),
+    )
+
+    results = hybrid.search("用户和模型如何落地", corpus="career", limit=2)
+
+    assert len(results) == 2
+    assert hybrid.last_diagnostics["mode"] == "vector"
+    assert hybrid.last_diagnostics["rerank_used"] is False

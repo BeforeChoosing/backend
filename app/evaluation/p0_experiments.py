@@ -193,10 +193,13 @@ def run_rag_ablation_experiment(
     raw_cases = json.loads(Path(cases_path).read_text(encoding="utf-8"))
     base = KnowledgeRetriever(settings.knowledge_dir, settings.knowledge_db_path)
     blocker = _NoRemoteGateway()
+    # The ablation's fourth arm must exercise fusion + rerank explicitly;
+    # production defaults may select the better semantic-vector strategy.
+    hybrid_settings = replace(settings, rag_retriever_mode="hybrid")
     hybrid = HybridKnowledgeRetriever(
         settings.knowledge_dir,
         settings.knowledge_db_path,
-        settings=settings,
+        settings=hybrid_settings,
         retriever=base,
         embedding_gateway=blocker,
         rerank_gateway=blocker,

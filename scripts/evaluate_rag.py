@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
@@ -127,10 +128,13 @@ def main() -> int:
     if not index.ready:
         print("改造后无法评估：本地向量索引为空，请先运行 scripts/build_vector_index.py。", file=sys.stderr)
         return 1
+    # Keep this command a stable before/after ablation even when production
+    # defaults to the currently best semantic-vector strategy.
+    hybrid_settings = replace(settings, rag_retriever_mode="hybrid")
     hybrid = HybridKnowledgeRetriever(
         settings.knowledge_dir,
         settings.knowledge_db_path,
-        settings=settings,
+        settings=hybrid_settings,
     )
     after_hit, after_mrr, after_details = _evaluate(hybrid, cases, limit=args.limit)
     report["after"] = {"hit_at_k": round(after_hit, 6), "mrr_at_k": round(after_mrr, 6), "details": after_details, "model": settings.bailian_rerank_model}
