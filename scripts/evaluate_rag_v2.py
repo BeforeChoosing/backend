@@ -62,6 +62,15 @@ def _load_cases(path: Path) -> list[dict[str, str]]:
             {
                 "query": str(item["query"]),
                 "expected_heading": str(item["expected_heading"]),
+                # v3 cases may target a non-career knowledge domain.  The
+                # defaults preserve the original 26-query career benchmark.
+                "corpus": str(item.get("corpus") or "career"),
+                "document_id": str(
+                    item.get("document_id")
+                    or ("job-ai-product-manager-v1" if not item.get("corpus") else "")
+                ),
+                "anchor": str(item.get("anchor") or ROLE_ANCHOR),
+                "suite": str(item.get("suite") or "legacy-career"),
             }
         )
     return cases
@@ -86,7 +95,11 @@ def _missing_queries(
     cases: list[dict[str, str]],
 ) -> list[str]:
     cache = ModelResponseCache(settings.knowledge_db_path)
-    queries = [ROLE_ANCHOR] + [case["query"] for case in cases]
+    queries = [
+        query
+        for case in cases
+        for query in (case.get("anchor") or ROLE_ANCHOR, case["query"])
+    ]
     missing: list[str] = []
     for query in dict.fromkeys(queries):
         payload = cache.get("rag-query-embedding", _cache_key(retriever, settings, query))
@@ -166,6 +179,8 @@ def main() -> int:
 
     settings = replace(get_settings(), rag_retriever_mode="vector")
     cases = _load_cases(args.cases)
+    report_version = "rag-eval-v3" if args.cases.stem.endswith("v3") else "rag-eval-v2"
+    report_title = "RAG v3 多查询评测" if report_version == "rag-eval-v3" else "RAG v2 多查询评测"
     base = KnowledgeRetriever(settings.knowledge_dir, settings.knowledge_db_path)
     missing = _missing_queries(base, settings, cases)
     if missing and not args.live:
@@ -207,16 +222,19 @@ def main() -> int:
     coverage: list[float] = []
     details: list[dict[str, Any]] = []
     for case in cases:
+        corpus = case["corpus"]
+        document_id = case.get("document_id") or None
+        anchor = case.get("anchor") or ROLE_ANCHOR
         baseline_results = baseline.search(
             case["query"],
-            corpus="career",
-            document_id="job-ai-product-manager-v1",
+            corpus=corpus,
+            document_id=document_id,
             limit=args.limit,
         )
         v2_results = v2.search_many(
-            [ROLE_ANCHOR, case["query"]],
-            corpus="career",
-            document_id="job-ai-product-manager-v1",
+            [anchor, case["query"]],
+            corpus=corpus,
+            document_id=document_id,
             limit=args.limit,
         )
         baseline_rank = _rank(baseline_results, case["expected_heading"])
@@ -224,22 +242,23 @@ def main() -> int:
         # Also score against the expanded career corpus without pinning the
         # legacy AI-PM document. This catches regressions caused by new JD
         # sources while keeping the original 26-case comparison intact.
-        expanded_baseline_results = baseline.search(
-            case["query"],
-            corpus="career",
-            limit=args.limit,
-        )
-        expanded_v2_results = v2.search_many(
-            [ROLE_ANCHOR, case["query"]],
-            corpus="career",
-            limit=args.limit,
-        )
-        expanded_baseline_ranks.append(
-            _rank(expanded_baseline_results, case["expected_heading"])
-        )
-        expanded_v2_ranks.append(
-            _rank(expanded_v2_results, case["expected_heading"])
-        )
+        if corpus == "career":
+            expanded_baseline_results = baseline.search(
+                case["query"],
+                corpus=corpus,
+                limit=args.limit,
+            )
+            expanded_v2_results = v2.search_many(
+                [anchor, case["query"]],
+                corpus=corpus,
+                limit=args.limit,
+            )
+            expanded_baseline_ranks.append(
+                _rank(expanded_baseline_results, case["expected_heading"])
+            )
+            expanded_v2_ranks.append(
+                _rank(expanded_v2_results, case["expected_heading"])
+            )
         baseline_ranks.append(baseline_rank)
         v2_ranks.append(v2_rank)
         baseline_diversity.append(_unique_heading_ratio(baseline_results))
@@ -249,6 +268,9 @@ def main() -> int:
             {
                 "query": case["query"],
                 "expected_heading": case["expected_heading"],
+                "corpus": corpus,
+                "document_id": document_id,
+                "suite": case.get("suite"),
                 "baseline_rank": baseline_rank,
                 "v2_rank": v2_rank,
                 "v2_mode": v2.last_diagnostics.get("mode"),
@@ -258,8 +280,25 @@ def main() -> int:
 
     baseline_metrics = _metrics(baseline_ranks, args.limit)
     v2_metrics = _metrics(v2_ranks, args.limit)
+    by_suite: dict[str, dict[str, Any]] = {}
+    for suite in dict.fromkeys(case.get("suite", "legacy-career") for case in cases):
+        suite_ranks = [
+            detail["v2_rank"]
+            for detail, case in zip(details, cases)
+            if case.get("suite", "legacy-career") == suite
+        ]
+        suite_baseline_ranks = [
+            detail["baseline_rank"]
+            for detail, case in zip(details, cases)
+            if case.get("suite", "legacy-career") == suite
+        ]
+        by_suite[suite] = {
+            "query_count": len(suite_ranks),
+            "pure_vector": _metrics(suite_baseline_ranks, args.limit),
+            "v2_multi_query_rrf_mmr": _metrics(suite_ranks, args.limit),
+        }
     report = {
-        "report_version": "rag-eval-v2",
+        "report_version": report_version,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "dataset": str(args.cases),
         "query_count": len(cases),
@@ -274,6 +313,7 @@ def main() -> int:
         "new_embedding_items": prefill_items + counted_gateway.items,
         "baseline_pure_vector": baseline_metrics,
         "v2_multi_query_rrf_mmr": v2_metrics,
+        "by_suite": by_suite,
         "expanded_career_corpus": {
             "pure_vector": _metrics(expanded_baseline_ranks, args.limit),
             "v2_multi_query_rrf_mmr": _metrics(expanded_v2_ranks, args.limit),
@@ -302,7 +342,7 @@ def main() -> int:
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     (args.output_dir / "report.md").write_text(
-        "# RAG v2 多查询评测\n\n"
+        f"# {report_title}\n\n"
         f"- 查询数：{len(cases)}\n"
         f"- 纯向量 Hit@1：{baseline_metrics['hit_at_1']:.1%}\n"
         f"- RAG v2 Hit@1：{v2_metrics['hit_at_1']:.1%}\n"
@@ -316,7 +356,22 @@ def main() -> int:
         f"RAG v2 {report['expanded_career_corpus']['v2_multi_query_rrf_mmr'][f'hit_at_{args.limit}']:.1%}\n"
         f"- 新增 Embedding 调用：{counted_gateway.calls} 次，文本 {counted_gateway.items} 条\n"
         f"- 平均不同章节占比：纯向量 {report['avg_unique_heading_ratio']['baseline']:.1%}，"
-        f"RAG v2 {report['avg_unique_heading_ratio']['v2']:.1%}\n",
+        f"RAG v2 {report['avg_unique_heading_ratio']['v2']:.1%}\n\n"
+        + "## 分套件结果\n\n"
+        + "| 套件 | 查询数 | 纯向量 Hit@1 | RAG v2 Hit@1 | 纯向量 Hit@5 | RAG v2 Hit@5 |\n"
+        + "|---|---:|---:|---:|---:|---:|\n"
+        + "\n".join(
+            "| {suite} | {count} | {pv1:.1%} | {v21:.1%} | {pv5:.1%} | {v25:.1%} |".format(
+                suite=suite,
+                count=metrics["query_count"],
+                pv1=metrics["pure_vector"]["hit_at_1"],
+                v21=metrics["v2_multi_query_rrf_mmr"]["hit_at_1"],
+                pv5=metrics["pure_vector"][f"hit_at_{args.limit}"],
+                v25=metrics["v2_multi_query_rrf_mmr"][f"hit_at_{args.limit}"],
+            )
+            for suite, metrics in report["by_suite"].items()
+        )
+        + "\n",
         encoding="utf-8",
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))

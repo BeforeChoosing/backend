@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "corpus": "public-career-demo",
   "documents": [
     {
@@ -100,6 +100,90 @@
       "authority_score": 0.95,
       "relevance_score": 1.0,
       "license": "项目内部规格；不含用户个人资料"
+    },
+    {
+      "path": "cases/apple_ai_product_cases.md",
+      "document_id": "case-apple-ai-product-v1",
+      "corpus": "case_study",
+      "trust_level": "primary_official_summary",
+      "source_note": "Apple Newsroom、Apple Developer/WWDC、Apple Machine Learning Research 与 Apple Security Research 的结构化短摘要；不复制受限原文，功能状态按页面版本标注。",
+      "source_url": "https://developer.apple.com/videos/play/wwdc2026/112/",
+      "version": "apple-ai-cases-v1.0",
+      "retrieved_at": "2026-08-30",
+      "source_type": "official_product_research_security_pages",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "官方公开资料；仅作短摘要与链接引用"
+    },
+    {
+      "path": "cases/apple_ai_evaluation_delivery.md",
+      "document_id": "case-apple-ai-eval-v1",
+      "corpus": "evaluation_safety",
+      "trust_level": "primary_official_summary",
+      "source_note": "Apple Developer/WWDC、Apple Machine Learning Research、Apple Security Research 与 Apple Newsroom 的评测和交付证据摘要。",
+      "source_url": "https://security.apple.com/documentation/private-cloud-compute/",
+      "version": "apple-ai-evaluation-v1.0",
+      "retrieved_at": "2026-08-30",
+      "source_type": "official_evaluation_security_pages",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "官方公开资料；仅作短摘要与链接引用"
+    },
+    {
+      "path": "cases/official_genai_product_workflows.md",
+      "document_id": "case-official-genai-workflows-v1",
+      "corpus": "case_study",
+      "trust_level": "primary_official_summary",
+      "source_note": "OpenAI、Google Cloud、Databricks、Anthropic、Meta、Adobe、Apple、阿里云、百度、火山引擎和华为云官方产品/工程/安全资料的结构化摘要。",
+      "source_url": "https://docs.databricks.com/aws/en/mlflow3/genai/eval-monitor/",
+      "version": "official-genai-workflows-v1.0",
+      "retrieved_at": "2026-08-30",
+      "source_type": "official_product_engineering_security_pages",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "官方公开资料；仅作短摘要与链接引用"
+    },
+    {
+      "path": "methods/official_genai_evaluation_and_governance.md",
+      "document_id": "method-genai-evaluation-governance-v1",
+      "corpus": "evaluation_safety",
+      "trust_level": "primary_official_summary",
+      "source_note": "OpenAI、Google Cloud、Databricks、Apple、Meta、阿里云和百度官方评测、治理与知识库文档的结构化摘要。",
+      "source_url": "https://openai.com/index/trustworthy-third-party-evaluations-foundations/",
+      "version": "official-genai-evaluation-v1.0",
+      "retrieved_at": "2026-08-30",
+      "source_type": "official_evaluation_governance_pages",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "官方公开资料；仅作短摘要与链接引用"
+    },
+    {
+      "path": "jobs/international_ai_product_roles_v2.md",
+      "document_id": "international-ai-product-roles-v2",
+      "corpus": "career_international",
+      "trust_level": "primary_official_summary",
+      "source_note": "Google、OpenAI、Anthropic、Databricks、Meta、Adobe 官方招聘/职业/团队资料的结构化摘要；可访问正文与聚合页、历史页分别标注使用边界。",
+      "source_url": "https://www.google.com/about/careers/applications/jobs/results/74642828323365574-product-manager/",
+      "version": "international-jd-v2.0",
+      "retrieved_at": "2026-08-30",
+      "source_type": "official_career_and_team_pages",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "公开招聘/职业页；保留链接并仅作事实摘要"
+    },
+    {
+      "path": "jobs/china_ai_product_roles.md",
+      "document_id": "china-ai-product-roles-v1",
+      "corpus": "career_china",
+      "trust_level": "primary_official_summary",
+      "source_note": "阿里、字节、华为、京东、快手、智谱、MiniMax、DeepSeek 官方招聘入口和岗位详情的结构化摘要；岗位状态和正文可见性按页面记录。",
+      "source_url": "https://campus-talent.alibaba.com/campus/gov",
+      "version": "china-jd-v1.0",
+      "retrieved_at": "2026-08-30",
+      "source_type": "official_career_pages",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "公开招聘页；保留链接并仅作事实摘要"
     },
     {
       "path": "jobs/jd_evidence_matrix.md",
