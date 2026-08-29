@@ -512,6 +512,29 @@ conda run -n before-choosing-demo python scripts/build_unified_evaluation_report
 
 报告写入 `evaluation-results/`（已忽略）。统一报告包含 TrialAgent 四组对照、RAG Hit/MRR、多模态页码与区域定位指标，以及正式模式的请求数、模型调用数、Token、平均延迟和按参数估算的费用。只有明确增加 `--live` 时才会产生检索 API 调用。
 
+真实多模态 OCR 对比将 PDF 页面渲染为图片，仅把图片发送给百炼视觉模型；PDF 文字层只在本地作为金标计算字符相似度。下列命令会对每个模型、每页发起一次真实调用：
+
+```bash
+conda run -n before-choosing-demo python scripts/evaluate_multimodal_ocr.py \
+  --pdf /absolute/path/to/document.pdf --pages 8 --model qwen-vl-ocr \
+  --output-dir evaluation-results/multimodal-ocr-qwen-vl-ocr-v1
+conda run -n before-choosing-demo python scripts/evaluate_multimodal_ocr.py \
+  --pdf /absolute/path/to/document.pdf --pages 8 --model qwen3-vl-plus \
+  --output-dir evaluation-results/multimodal-ocr-qwen3-vl-plus-v1
+```
+
+完成 TrialAgent、RAG 和两组 OCR 实验后，使用以下离线命令汇总证据；该命令不调用模型：
+
+```bash
+conda run -n before-choosing-demo python scripts/build_experiment_evidence_report.py \
+  --trial-report evaluation-results/trial-agent-locked-v1/aggregate/report.json \
+  --rag-report evaluation-results/rag-live-v1/report.json \
+  --multimodal-report evaluation-results/multimodal-ocr-qwen-vl-ocr-v1/report.json \
+  --multimodal-report evaluation-results/multimodal-ocr-qwen3-vl-plus-v1/report.json
+```
+
+报告同时记录样本量和结论边界。小型锁定集用于回归和方向性对比，不替代更大规模的人工审核测试集。
+
 ### 正式模式审计日志
 
 前端正式模式请求携带 `X-App-Mode: use`，后端中间件记录每个非健康检查请求的路径、状态、延迟和请求标识；模型网关同时记录 Qwen、Qwen-VL、Embedding、Rerank 的模型名、延迟与返回的 Token 用量。用户答案、上传材料和提示词正文不写入日志。演示模式不写入正式审计记录。
