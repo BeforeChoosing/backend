@@ -147,9 +147,13 @@ Coach提示不直接扣分；根据提示使用级别把coach_dependency标为�
             normalized["evidence_refs"] = [ref for ref in refs if isinstance(ref, str)] if isinstance(refs, list) else []
             safe_supporting.append(normalized)
         safe_raw["supporting_evidence"] = safe_supporting
-        for field in ("process_evidence", "strengths", "gaps"):
-            if not isinstance(safe_raw.get(field), list):
-                safe_raw[field] = []
+        for field, limit in {
+            "process_evidence": 6,
+            "strengths": 5,
+            "gaps": 5,
+        }.items():
+            value = safe_raw.get(field)
+            safe_raw[field] = value[:limit] if isinstance(value, list) else []
         refs = safe_raw.get("evidence_refs")
         safe_raw["evidence_refs"] = [ref for ref in refs if isinstance(ref, str)] if isinstance(refs, list) else []
         # Ability applications are derived from persisted card usage below;

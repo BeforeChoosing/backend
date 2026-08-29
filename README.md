@@ -535,6 +535,40 @@ conda run -n before-choosing-demo python scripts/build_experiment_evidence_repor
 
 报告同时记录样本量和结论边界。小型锁定集用于回归和方向性对比，不替代更大规模的人工审核测试集。
 
+### P0 核心技术实验
+
+四组 P0 实验覆盖校验链变异测试、RAG 四组消融、并发幂等测试和 TrialAgent 证据敏感性测试。前三组完全读取本地资产，不调用百炼：
+
+macOS：
+
+```bash
+conda activate before-choosing-demo
+python scripts/run_p0_experiments.py
+```
+
+Windows PowerShell：
+
+```powershell
+conda activate before-choosing-demo
+python .\scripts\run_p0_experiments.py
+```
+
+执行 TrialAgent 证据敏感性实验时增加 `--live-sensitivity`。该实验对 12 个固定任务分别评价原始作答与删证据作答，形成 24 个唯一有效模型结果；结果按请求指纹写入本地缓存，重复执行不会再次付费调用：
+
+macOS：
+
+```bash
+python scripts/run_p0_experiments.py --live-sensitivity --concurrency 3
+```
+
+Windows PowerShell：
+
+```powershell
+python .\scripts\run_p0_experiments.py --live-sensitivity --concurrency 3
+```
+
+报告写入 `evaluation-results/p0-experiments-v1/report.md` 和 `report.json`。`evaluation-results/` 已加入 Git 忽略规则，不提交模型输出、缓存和实验中间产物。
+
 ### 正式模式审计日志
 
 前端正式模式请求携带 `X-App-Mode: use`，后端中间件记录每个非健康检查请求的路径、状态、延迟和请求标识；模型网关同时记录 Qwen、Qwen-VL、Embedding、Rerank 的模型名、延迟与返回的 Token 用量。用户答案、上传材料和提示词正文不写入日志。演示模式不写入正式审计记录。
