@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -82,6 +83,7 @@ def parse_args() -> argparse.Namespace:
         help="调用一次向量查询和一次 Rerank/题目（使用已有本地向量索引）",
     )
     parser.add_argument("--limit", type=int, default=5, help="每个查询评估前 K 条结果")
+    parser.add_argument("--output-dir", type=Path, default=REPOSITORY_ROOT / "evaluation-results" / "rag-v1")
     parser.add_argument(
         "--cases",
         type=Path,
@@ -101,8 +103,24 @@ def main() -> int:
     for detail in before_details:
         print(f"  {detail}")
 
+    report = {
+        "report_version": "rag-eval-v1",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "dataset": str(args.cases),
+        "k": args.limit,
+        "before": {"hit_at_k": round(before_hit, 6), "mrr_at_k": round(before_mrr, 6), "details": before_details},
+        "after": {"hit_at_k": None, "mrr_at_k": None, "details": [], "model": settings.bailian_rerank_model},
+        "live": bool(args.live),
+        "api_calls_estimate": 0,
+    }
     if not args.live:
         print("改造后：未执行（加入 --live 才调用百炼；默认不产生费用）")
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        (args.output_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        (args.output_dir / "report.md").write_text(
+            f"# RAG 检索评测\n\n- FTS5 Hit@{args.limit}: {before_hit:.3f}\n- FTS5 MRR@{args.limit}: {before_mrr:.3f}\n- Embedding + Rerank：未执行（离线模式）\n",
+            encoding="utf-8",
+        )
         return 0
 
     index = LocalVectorIndex(settings.knowledge_db_path)
@@ -115,9 +133,17 @@ def main() -> int:
         settings=settings,
     )
     after_hit, after_mrr, after_details = _evaluate(hybrid, cases, limit=args.limit)
+    report["after"] = {"hit_at_k": round(after_hit, 6), "mrr_at_k": round(after_mrr, 6), "details": after_details, "model": settings.bailian_rerank_model}
+    report["api_calls_estimate"] = len(cases) * 2
     print(
         f"改造后 Embedding + {settings.bailian_rerank_model}："
         f"Hit@{args.limit}={after_hit:.3f}，MRR@{args.limit}={after_mrr:.3f}"
+    )
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    (args.output_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    (args.output_dir / "report.md").write_text(
+        f"# RAG 检索评测\n\n- FTS5 Hit@{args.limit}: {before_hit:.3f}\n- FTS5 MRR@{args.limit}: {before_mrr:.3f}\n- Embedding + Rerank Hit@{args.limit}: {after_hit:.3f}\n- Embedding + Rerank MRR@{args.limit}: {after_mrr:.3f}\n",
+        encoding="utf-8",
     )
     for detail in after_details:
         print(f"  {detail}")

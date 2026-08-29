@@ -473,6 +473,36 @@ conda run -n before-choosing-demo python scripts/evaluate_rag.py --live
 
 评测集规模较小，用于本地回归和方向性比较；正式材料中的结论应同时记录资料版本、模型版本和调用日期。
 
+### 统一评测与成本报告
+
+各评测脚本只读取已有数据和预测结果，不会隐式调用百炼。先运行 RAG 与多模态离线评测，再将结果合并为一份报告：
+
+```bash
+conda run -n before-choosing-demo python scripts/evaluate_rag.py
+conda run -n before-choosing-demo python scripts/evaluate_multimodal.py \
+  --cases datasets/multimodal/cases.jsonl \
+  --predictions datasets/multimodal/predictions.jsonl
+conda run -n before-choosing-demo python scripts/build_unified_evaluation_report.py \
+  --trial-report evaluation-results/trial-agent-v1/report.json \
+  --rag-report evaluation-results/rag-v1/report.json \
+  --multimodal-report evaluation-results/multimodal-v1/report.json
+```
+
+报告写入 `evaluation-results/`（已忽略）。统一报告包含 TrialAgent 四组对照、RAG Hit/MRR、多模态页码与区域定位指标，以及正式模式的请求数、模型调用数、Token、平均延迟和按参数估算的费用。只有明确增加 `--live` 时才会产生检索 API 调用。
+
+### 正式模式审计日志
+
+前端正式模式请求携带 `X-App-Mode: use`，后端中间件记录每个非健康检查请求的路径、状态、延迟和请求标识；模型网关同时记录 Qwen、Qwen-VL、Embedding、Rerank 的模型名、延迟与返回的 Token 用量。用户答案、上传材料和提示词正文不写入日志。演示模式不写入正式审计记录。
+
+查看用量摘要：
+
+```bash
+curl -H "X-App-Mode: use" http://localhost:8000/api/v1/audit/usage
+curl -H "X-App-Mode: use" http://localhost:8000/api/v1/audit/events?limit=50
+```
+
+页面点击和表单变更由前端以 `ui_action` 事件记录，后端接口调用由 `http_request` 事件记录，二者共享客户端请求标识，可用于复盘完整操作链路。
+
 ## 本地画像持久化
 
 用户点击“加入能力库”后，已确认卡片会写入本机 SQLite 文件。`PROFILE_DB_PATH` 用于指定文件位置，默认值为 `profile.db`；该文件已加入 Git 忽略规则，不会提交到仓库。

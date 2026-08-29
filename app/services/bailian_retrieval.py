@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from typing import Any, Sequence
 
 from app.config import Settings
 from app.services.llm_gateway import LLMGatewayError
+from app.services.audit_log import record_model_call
 
 
 class BailianRetrievalError(LLMGatewayError):
@@ -60,13 +62,17 @@ class DashScopeEmbeddingGateway:
         self._require_key()
 
         payload = self._payload(normalized, text_type=text_type)
+        started = time.perf_counter()
         response_payload = _post_json(
-            self.settings.bailian_embedding_url,
-            self.settings.dashscope_api_key,
-            payload,
-            self.settings.request_timeout_seconds,
-            service_name="Embedding",
+            self.settings.bailian_embedding_url, self.settings.dashscope_api_key, payload,
+            self.settings.request_timeout_seconds, service_name="Embedding",
             error_type=EmbeddingGatewayError,
+        )
+        record_model_call(
+            getattr(self.settings, "profile_db_path", "profile.db"), service="embedding",
+            model=self.settings.bailian_embedding_model,
+            duration_ms=(time.perf_counter() - started) * 1000,
+            metadata={"endpoint": "embedding", "items": len(normalized)},
         )
         return self._parse_vectors(response_payload, len(normalized))
 
@@ -198,6 +204,7 @@ class DashScopeRerankGateway:
                 "top_n": bounded_top_n,
             },
         }
+        started = time.perf_counter()
         response_payload = _post_json(
             self.settings.bailian_rerank_url,
             self.settings.dashscope_api_key,
@@ -205,6 +212,12 @@ class DashScopeRerankGateway:
             self.settings.request_timeout_seconds,
             service_name="Rerank",
             error_type=RerankGatewayError,
+        )
+        record_model_call(
+            getattr(self.settings, "profile_db_path", "profile.db"), service="rerank",
+            model=self.settings.bailian_rerank_model,
+            duration_ms=(time.perf_counter() - started) * 1000,
+            metadata={"endpoint": "rerank", "documents": len(normalized_documents)},
         )
         output = response_payload.get("output")
         raw_results: Any = output.get("results") if isinstance(output, dict) else None
