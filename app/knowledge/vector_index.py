@@ -101,6 +101,25 @@ class LocalVectorIndex:
                 ],
             )
 
+    def update_source_fingerprint(
+        self,
+        chunk_ids: set[str],
+        source_fingerprint: str,
+    ) -> None:
+        """Refresh provenance for reused vectors without re-embedding them."""
+
+        if not chunk_ids:
+            return
+        with self._connection() as connection:
+            connection.executemany(
+                """
+                UPDATE knowledge_embeddings
+                SET source_fingerprint = ?
+                WHERE chunk_id = ?
+                """,
+                [(source_fingerprint, chunk_id) for chunk_id in chunk_ids],
+            )
+
     def remove_except(
         self,
         chunk_ids: set[str],
@@ -256,6 +275,7 @@ class VectorIndexBuilder:
         existing = self.index.existing()
         pending: list[tuple[KnowledgeChunk, str, str]] = []
         reused = 0
+        reused_ids: set[str] = set()
         valid_ids = {chunk.id for chunk in chunks}
         for chunk in chunks:
             text = chunk_embedding_text(chunk)
@@ -266,9 +286,9 @@ class VectorIndexBuilder:
                 and row["model"] == self.model
                 and int(row["dimension"]) == self.dimension
                 and row["content_hash"] == content_hash
-                and row["source_fingerprint"] == source_fingerprint
             ):
                 reused += 1
+                reused_ids.add(chunk.id)
                 continue
             pending.append((chunk, text, content_hash))
 
@@ -298,6 +318,11 @@ class VectorIndexBuilder:
                 )
             self.index.upsert(entries)
             embedded += len(entries)
+
+        # A source change invalidates the corpus fingerprint, but not a vector
+        # whose embedding text is byte-for-byte unchanged. Refresh the stamp so
+        # vector retrieval can keep its source guard while avoiding an API call.
+        self.index.update_source_fingerprint(reused_ids, source_fingerprint)
 
         removed = self.index.remove_except(
             valid_ids,

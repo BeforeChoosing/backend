@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 from app.config import get_settings  # noqa: E402
 from app.knowledge.hybrid import HybridKnowledgeRetriever  # noqa: E402
 from app.knowledge.retriever import KnowledgeRetriever  # noqa: E402
+from app.knowledge.vector_index import LocalVectorIndex  # noqa: E402
 from app.services.bailian_retrieval import DashScopeEmbeddingGateway  # noqa: E402
 from app.services.model_response_cache import ModelResponseCache  # noqa: E402
 
@@ -67,11 +68,13 @@ def _load_cases(path: Path) -> list[dict[str, str]]:
 
 
 def _cache_key(retriever: KnowledgeRetriever, settings: Any, query: str) -> str:
+    # Query embeddings depend on the embedding model and query text, not on
+    # the current corpus. Keeping the corpus fingerprint here forced a full
+    # re-embed of all 26 evaluation queries whenever documents were added.
     return ModelResponseCache.fingerprint(
         {
             "model": settings.bailian_embedding_model,
             "dimension": settings.bailian_embedding_dimension,
-            "source_fingerprint": retriever.source_fingerprint,
             "query": query,
         }
     )
@@ -197,6 +200,8 @@ def main() -> int:
 
     baseline_ranks: list[int | None] = []
     v2_ranks: list[int | None] = []
+    expanded_baseline_ranks: list[int | None] = []
+    expanded_v2_ranks: list[int | None] = []
     baseline_diversity: list[float] = []
     v2_diversity: list[float] = []
     coverage: list[float] = []
@@ -216,6 +221,25 @@ def main() -> int:
         )
         baseline_rank = _rank(baseline_results, case["expected_heading"])
         v2_rank = _rank(v2_results, case["expected_heading"])
+        # Also score against the expanded career corpus without pinning the
+        # legacy AI-PM document. This catches regressions caused by new JD
+        # sources while keeping the original 26-case comparison intact.
+        expanded_baseline_results = baseline.search(
+            case["query"],
+            corpus="career",
+            limit=args.limit,
+        )
+        expanded_v2_results = v2.search_many(
+            [ROLE_ANCHOR, case["query"]],
+            corpus="career",
+            limit=args.limit,
+        )
+        expanded_baseline_ranks.append(
+            _rank(expanded_baseline_results, case["expected_heading"])
+        )
+        expanded_v2_ranks.append(
+            _rank(expanded_v2_results, case["expected_heading"])
+        )
         baseline_ranks.append(baseline_rank)
         v2_ranks.append(v2_rank)
         baseline_diversity.append(_unique_heading_ratio(baseline_results))
@@ -242,12 +266,26 @@ def main() -> int:
         "k": args.limit,
         "role_anchor": ROLE_ANCHOR,
         "embedding_model": settings.bailian_embedding_model,
+        "indexed_chunk_count": base.chunk_count,
+        "indexed_vector_count": LocalVectorIndex(settings.knowledge_db_path).count,
         "live": bool(args.live),
         "missing_vectors_before_run": missing,
         "new_embedding_api_calls": prefill_calls + counted_gateway.calls,
         "new_embedding_items": prefill_items + counted_gateway.items,
         "baseline_pure_vector": baseline_metrics,
         "v2_multi_query_rrf_mmr": v2_metrics,
+        "expanded_career_corpus": {
+            "pure_vector": _metrics(expanded_baseline_ranks, args.limit),
+            "v2_multi_query_rrf_mmr": _metrics(expanded_v2_ranks, args.limit),
+            "delta": {
+                key: round(
+                    _metrics(expanded_v2_ranks, args.limit)[key]
+                    - _metrics(expanded_baseline_ranks, args.limit)[key],
+                    6,
+                )
+                for key in ("hit_at_1", f"hit_at_{args.limit}", f"mrr_at_{args.limit}")
+            },
+        },
         "delta": {
             key: round(v2_metrics[key] - baseline_metrics[key], 6)
             for key in ("hit_at_1", f"hit_at_{args.limit}", f"mrr_at_{args.limit}")
@@ -272,6 +310,10 @@ def main() -> int:
         f"- RAG v2 Hit@{args.limit}：{v2_metrics[f'hit_at_{args.limit}']:.1%}\n"
         f"- 纯向量 MRR@{args.limit}：{baseline_metrics[f'mrr_at_{args.limit}']:.1%}\n"
         f"- RAG v2 MRR@{args.limit}：{v2_metrics[f'mrr_at_{args.limit}']:.1%}\n"
+        f"- 扩展 career 语料 Hit@1：纯向量 {report['expanded_career_corpus']['pure_vector']['hit_at_1']:.1%}，"
+        f"RAG v2 {report['expanded_career_corpus']['v2_multi_query_rrf_mmr']['hit_at_1']:.1%}\n"
+        f"- 扩展 career 语料 Hit@{args.limit}：纯向量 {report['expanded_career_corpus']['pure_vector'][f'hit_at_{args.limit}']:.1%}，"
+        f"RAG v2 {report['expanded_career_corpus']['v2_multi_query_rrf_mmr'][f'hit_at_{args.limit}']:.1%}\n"
         f"- 新增 Embedding 调用：{counted_gateway.calls} 次，文本 {counted_gateway.items} 条\n"
         f"- 平均不同章节占比：纯向量 {report['avg_unique_heading_ratio']['baseline']:.1%}，"
         f"RAG v2 {report['avg_unique_heading_ratio']['v2']:.1%}\n",

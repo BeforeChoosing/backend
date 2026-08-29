@@ -98,6 +98,9 @@ class CareerAgent:
                             "source_locator": chunk.source_locator,
                             "trust_level": chunk.trust_level,
                             "content": chunk.content,
+                            "source_url": chunk.source_url,
+                            "version": chunk.version,
+                            "source_type": chunk.source_type,
                         }
                         for chunk in retrieved
                     ],
@@ -189,6 +192,13 @@ class CareerAgent:
                     content=chunk.content,
                     trust_level=chunk.trust_level,
                     source_note=chunk.source_note,
+                    source_url=chunk.source_url,
+                    published_at=chunk.published_at,
+                    version=chunk.version,
+                    license=chunk.license,
+                    source_type=chunk.source_type,
+                    authority_score=chunk.authority_score,
+                    relevance_score=chunk.relevance_score,
                 )
                 for chunk in retrieved
             ],
