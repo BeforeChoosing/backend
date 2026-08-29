@@ -133,13 +133,18 @@ async def _run_live_case(
         model_override=model_id,
     )
     started = time.perf_counter()
-    evaluation = await agent.evaluate_dynamic(task, case.answer, [], evidence_bundle)
-    evaluation, evidence_bundle = TrialScoringService.finalize_dynamic(
-        task,
-        case.answer,
-        [],
-        evaluation,
-    )
+    try:
+        evaluation = await agent.evaluate_dynamic(task, case.answer, [], evidence_bundle)
+        evaluation, evidence_bundle = TrialScoringService.finalize_dynamic(
+            task,
+            case.answer,
+            [],
+            evaluation,
+        )
+    except ValidationError:
+        # Keep the case in the report as schema-invalid instead of aborting the
+        # entire arm. The deterministic evaluator will score schema_valid=False.
+        return ({}, [item.id for item in evidence_bundle.items], False, (time.perf_counter() - started) * 1000)
     verifier_triggered = False
     if with_validator:
         verification = TrialVerificationService(
