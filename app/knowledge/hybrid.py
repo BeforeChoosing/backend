@@ -48,6 +48,22 @@ class HybridKnowledgeRetriever:
         self.cache = cache or ModelResponseCache(self.base.db_path)
         self.candidate_limit = max(1, min(int(getattr(self.settings, "rag_candidate_limit", 20)), 100))
         self.rerank_limit = max(1, min(int(getattr(self.settings, "rag_rerank_limit", 5)), 100))
+        # Adaptive mode only spends a rerank request when the local semantic
+        # ranking is ambiguous.  The defaults are intentionally conservative:
+        # most queries stay on the cached local vector path.
+        self.adaptive_margin = max(
+            0.0, float(getattr(self.settings, "rag_adaptive_margin", 0.055))
+        )
+        self.adaptive_rerank_min_margin = max(
+            0.0,
+            float(
+                getattr(
+                    self.settings,
+                    "rag_adaptive_rerank_min_margin",
+                    0.02,
+                )
+            ),
+        )
         self.last_diagnostics: dict[str, Any] = {}
 
     def search(
@@ -89,10 +105,11 @@ class HybridKnowledgeRetriever:
                 vector_error = str(exc)
                 logger.warning("local vector retrieval unavailable: %s", exc)
 
-        candidate_ids = list(dict.fromkeys(
-            [chunk.id for chunk in lexical]
-            + [hit.chunk_id for hit in vector_hits]
-        ))[:candidate_limit]
+        candidate_ids = self._merge_candidate_ids(
+            lexical,
+            vector_hits,
+            limit=candidate_limit,
+        )
         candidates = self.base.get_chunks_by_ids(candidate_ids)
         if not candidates:
             self.last_diagnostics = {
@@ -109,23 +126,86 @@ class HybridKnowledgeRetriever:
         # filling a short result set when necessary.
         retriever_mode = str(getattr(self.settings, "rag_retriever_mode", "hybrid")).lower()
         if vector_hits and retriever_mode in {"vector", "semantic", "vector_only"}:
-            by_id = {chunk.id: chunk for chunk in candidates}
-            vector_ranked = [
-                replace(by_id[hit.chunk_id], score=hit.score)
-                for hit in vector_hits
-                if hit.chunk_id in by_id
-            ]
-            seen_ids = {chunk.id for chunk in vector_ranked}
-            if len(vector_ranked) < bounded_limit:
-                vector_ranked.extend(
-                    replace(chunk, score=chunk.score)
-                    for chunk in lexical
-                    if chunk.id not in seen_ids
-                )
+            vector_ranked = self._vector_ranked(
+                vector_hits,
+                candidates,
+                lexical,
+                limit=bounded_limit,
+            )
             self.last_diagnostics = {
                 "mode": "vector",
                 "vector_used": True,
                 "rerank_used": False,
+                "adaptive_rerank_triggered": False,
+                "vector_error": vector_error,
+            }
+            return vector_ranked[:bounded_limit]
+
+        if vector_hits and retriever_mode in {"adaptive", "adaptive_rerank"}:
+            vector_ranked = self._vector_ranked(
+                vector_hits,
+                candidates,
+                lexical,
+                limit=bounded_limit,
+            )
+            margin = self._vector_margin(vector_hits)
+            should_rerank = margin < self.adaptive_margin
+            if not should_rerank:
+                self.last_diagnostics = {
+                    "mode": "adaptive-vector",
+                    "vector_used": True,
+                    "rerank_used": False,
+                    "adaptive_rerank_triggered": False,
+                    "adaptive_margin": margin,
+                    "adaptive_threshold": self.adaptive_margin,
+                    "vector_error": vector_error,
+                }
+                return vector_ranked[:bounded_limit]
+
+            reranked = self._try_rerank(normalized_query, candidates, bounded_limit)
+            rerank_margin = self._rerank_margin(reranked)
+            if reranked is not None and rerank_margin >= self.adaptive_rerank_min_margin:
+                # A remote cross-encoder is a secondary signal.  Pin the
+                # local semantic winner so an unstable reranker cannot turn a
+                # previously correct top-1 result into a miss.  It may still
+                # reorder the remaining candidates and improve MRR/Hit@K.
+                vector_top = vector_ranked[0] if vector_ranked else None
+                if vector_top is not None:
+                    vector_ids = {chunk.id for chunk in vector_ranked}
+                    reranked_tail = [
+                        chunk
+                        for chunk in reranked
+                        if chunk.id != vector_top.id and chunk.id in vector_ids
+                    ]
+                    # Keep the requested-K vector candidate set intact.  The
+                    # remote model can reorder those candidates, but cannot
+                    # replace them with out-of-set documents and reduce recall.
+                    reranked = [vector_top] + reranked_tail
+                    seen = {chunk.id for chunk in reranked}
+                    reranked.extend(
+                        chunk for chunk in vector_ranked if chunk.id not in seen
+                    )
+                self.last_diagnostics = {
+                    "mode": "adaptive-rerank",
+                    "vector_used": True,
+                    "rerank_used": True,
+                    "adaptive_rerank_triggered": True,
+                    "adaptive_vector_top_pinned": vector_top is not None,
+                    "adaptive_margin": margin,
+                    "adaptive_threshold": self.adaptive_margin,
+                    "rerank_margin": rerank_margin,
+                    "vector_error": vector_error,
+                }
+                return reranked[:bounded_limit]
+
+            self.last_diagnostics = {
+                "mode": "adaptive-vector-fallback",
+                "vector_used": True,
+                "rerank_used": False,
+                "adaptive_rerank_triggered": True,
+                "adaptive_margin": margin,
+                "adaptive_threshold": self.adaptive_margin,
+                "rerank_margin": rerank_margin,
                 "vector_error": vector_error,
             }
             return vector_ranked[:bounded_limit]
@@ -136,6 +216,7 @@ class HybridKnowledgeRetriever:
                 "mode": "hybrid+rereank" if vector_hits else "fts+rereank",
                 "vector_used": bool(vector_hits),
                 "rerank_used": True,
+                "adaptive_rerank_triggered": False,
                 "vector_error": vector_error,
             }
             return reranked[:bounded_limit]
@@ -145,9 +226,77 @@ class HybridKnowledgeRetriever:
             "mode": "hybrid" if vector_hits else "fts",
             "vector_used": bool(vector_hits),
             "rerank_used": False,
+            "adaptive_rerank_triggered": False,
             "vector_error": vector_error,
         }
         return fallback[:bounded_limit]
+
+    @staticmethod
+    def _merge_candidate_ids(
+        lexical: Sequence[KnowledgeChunk],
+        vector_hits: Sequence[VectorHit],
+        *,
+        limit: int,
+    ) -> list[str]:
+        """Interleave lexical and vector recall instead of truncating lexical first.
+
+        The old lexical-first truncation could remove semantically relevant
+        vector candidates before reranking.  Alternating both ranked lists
+        preserves recall while keeping the remote rerank input bounded.
+        """
+
+        lexical_ids = [chunk.id for chunk in lexical]
+        vector_ids = [hit.chunk_id for hit in vector_hits]
+        merged: list[str] = []
+        seen: set[str] = set()
+        width = max(len(lexical_ids), len(vector_ids))
+        for index in range(width):
+            for values in (vector_ids, lexical_ids):
+                if index >= len(values):
+                    continue
+                chunk_id = values[index]
+                if chunk_id in seen:
+                    continue
+                seen.add(chunk_id)
+                merged.append(chunk_id)
+                if len(merged) >= limit:
+                    return merged
+        return merged
+
+    @staticmethod
+    def _vector_ranked(
+        vector_hits: Sequence[VectorHit],
+        candidates: Sequence[KnowledgeChunk],
+        lexical: Sequence[KnowledgeChunk],
+        *,
+        limit: int,
+    ) -> list[KnowledgeChunk]:
+        by_id = {chunk.id: chunk for chunk in candidates}
+        ranked = [
+            replace(by_id[hit.chunk_id], score=hit.score)
+            for hit in vector_hits
+            if hit.chunk_id in by_id
+        ]
+        seen_ids = {chunk.id for chunk in ranked}
+        if len(ranked) < limit:
+            ranked.extend(
+                replace(chunk, score=chunk.score)
+                for chunk in lexical
+                if chunk.id not in seen_ids
+            )
+        return ranked[:limit]
+
+    @staticmethod
+    def _vector_margin(vector_hits: Sequence[VectorHit]) -> float:
+        if len(vector_hits) < 2:
+            return float("inf")
+        return max(0.0, float(vector_hits[0].score) - float(vector_hits[1].score))
+
+    @staticmethod
+    def _rerank_margin(reranked: Sequence[KnowledgeChunk] | None) -> float:
+        if not reranked or len(reranked) < 2:
+            return 0.0
+        return max(0.0, float(reranked[0].score) - float(reranked[1].score))
 
     def _query_vector(self, query: str) -> list[float]:
         model = getattr(self.settings, "bailian_embedding_model", "")

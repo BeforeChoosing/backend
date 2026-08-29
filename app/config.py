@@ -85,11 +85,16 @@ class Settings:
     bailian_rerank_fallback_model: str = os.getenv(
         "BAILIAN_RERANK_FALLBACK_MODEL", "gte-rerank-v2"
     )
-    # Expanded local evaluation currently favors semantic vector ranking.
-    # Set RAG_RETRIEVER_MODE=hybrid to enable the fusion + rerank comparison path.
+    # Vector is the current best-performing default on the expanded set.
+    # Adaptive is an opt-in cost-aware rerank experiment; hybrid reproduces
+    # the fixed fusion + rerank ablation arm.
     rag_retriever_mode: str = os.getenv("RAG_RETRIEVER_MODE", "vector")
     rag_candidate_limit: int = int(os.getenv("RAG_CANDIDATE_LIMIT", "20"))
     rag_rerank_limit: int = int(os.getenv("RAG_RERANK_LIMIT", "5"))
+    rag_adaptive_margin: float = float(os.getenv("RAG_ADAPTIVE_MARGIN", "0.055"))
+    rag_adaptive_rerank_min_margin: float = float(
+        os.getenv("RAG_ADAPTIVE_RERANK_MIN_MARGIN", "0.02")
+    )
     cors_origins: tuple[str, ...] = _csv(
         os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
     )

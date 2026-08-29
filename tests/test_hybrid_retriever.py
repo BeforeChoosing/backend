@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from app.knowledge.retriever import KnowledgeRetriever
 from app.knowledge.vector_index import VectorIndexBuilder
 from app.knowledge.hybrid import HybridKnowledgeRetriever
+from app.knowledge.vector_index import VectorHit
 from app.services.model_response_cache import ModelResponseCache
 
 
@@ -179,3 +180,85 @@ def test_vector_mode_uses_local_semantic_order_without_rerank(tmp_path):
     assert len(results) == 2
     assert hybrid.last_diagnostics["mode"] == "vector"
     assert hybrid.last_diagnostics["rerank_used"] is False
+
+
+def test_candidate_merge_interleaves_vector_and_lexical_recall():
+    lexical = [
+        type("Chunk", (), {"id": "lex-1"})(),
+        type("Chunk", (), {"id": "shared"})(),
+        type("Chunk", (), {"id": "lex-2"})(),
+    ]
+    vector = [
+        VectorHit("vec-1", 0.9),
+        VectorHit("shared", 0.8),
+        VectorHit("vec-2", 0.7),
+    ]
+
+    merged = HybridKnowledgeRetriever._merge_candidate_ids(lexical, vector, limit=5)
+
+    assert merged == ["vec-1", "lex-1", "shared", "vec-2", "lex-2"]
+
+
+def test_adaptive_mode_reranks_only_when_vector_margin_is_low(tmp_path):
+    retriever = _retriever(tmp_path)
+    settings = SimpleNamespace(
+        **vars(_settings()),
+        rag_retriever_mode="adaptive",
+        rag_adaptive_margin=0.5,
+        rag_adaptive_rerank_min_margin=0.01,
+    )
+    embedding = _FakeEmbeddingGateway()
+    VectorIndexBuilder(
+        retriever,
+        embedding,
+        model=settings.bailian_embedding_model,
+        dimension=settings.bailian_embedding_dimension,
+    ).build()
+    rerank = _FakeRerankGateway()
+    hybrid = HybridKnowledgeRetriever(
+        retriever.source_dir,
+        retriever.db_path,
+        settings=settings,
+        embedding_gateway=embedding,
+        rerank_gateway=rerank,
+        cache=ModelResponseCache(retriever.db_path),
+    )
+
+    results = hybrid.search("用户和模型如何落地", corpus="career", limit=2)
+
+    assert len(results) == 2
+    assert len(rerank.calls) == 1
+    assert hybrid.last_diagnostics["mode"] == "adaptive-rerank"
+    assert hybrid.last_diagnostics["adaptive_rerank_triggered"] is True
+
+
+def test_adaptive_mode_keeps_vector_for_confident_query(tmp_path):
+    retriever = _retriever(tmp_path)
+    settings = SimpleNamespace(
+        **vars(_settings()),
+        rag_retriever_mode="adaptive",
+        rag_adaptive_margin=0.0,
+    )
+    embedding = _FakeEmbeddingGateway()
+    VectorIndexBuilder(
+        retriever,
+        embedding,
+        model=settings.bailian_embedding_model,
+        dimension=settings.bailian_embedding_dimension,
+    ).build()
+    rerank = _FakeRerankGateway()
+    hybrid = HybridKnowledgeRetriever(
+        retriever.source_dir,
+        retriever.db_path,
+        settings=settings,
+        embedding_gateway=embedding,
+        rerank_gateway=rerank,
+        cache=ModelResponseCache(retriever.db_path),
+    )
+
+    results = hybrid.search("用户和模型如何落地", corpus="career", limit=2)
+
+    assert len(results) == 2
+    assert rerank.calls == []
+    assert hybrid.last_diagnostics["mode"] == "adaptive-vector"
+    assert hybrid.last_diagnostics["adaptive_rerank_triggered"] is False

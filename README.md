@@ -447,7 +447,7 @@ python scripts/export_trial_teacher_dataset.py \
 
 ## 本地岗位 RAG 与职业推演
 
-职业探索页只读取已确认能力卡。后端将能力卡内容与本地岗位资料组合成检索词，使用百炼 `qwen3.7-text-embedding` 生成查询向量，在本地 SQLite 向量表中做余弦检索，再把带引用 ID 的片段交给 Qwen 生成结构化推演。当前 `RAG_RETRIEVER_MODE=vector` 是扩展评测集上的默认策略；`hybrid` 可切换到 SQLite FTS5 + 向量融合 + `qwen3-rerank` 对照链路。前端不会直接请求百炼，也不会接触 API Key。
+职业探索页只读取已确认能力卡。后端将能力卡内容与本地岗位资料组合成检索词，使用百炼 `qwen3.7-text-embedding` 生成查询向量，在本地 SQLite 向量表中做余弦检索，再把带引用 ID 的片段交给 Qwen 生成结构化推演。当前 `RAG_RETRIEVER_MODE=vector` 是扩展评测集上的默认策略；`adaptive` 是成本受控的实验模式，仅在向量 Top1 与 Top2 间隔低于 `RAG_ADAPTIVE_MARGIN` 时调用 `qwen3-rerank`，并固定保留向量 Top-K 候选集合，防止重排降低召回；`hybrid` 用于复现 SQLite FTS5 + 向量融合 + 重排的固定对照链路。前端不会直接请求百炼，也不会接触 API Key。
 
 模型选择依据：岗位资料是文本，使用 `qwen3.7-text-embedding`，避免引入视觉模型或本地模型文件；重排使用同属 Qwen 系列的 `qwen3-rerank`，保持与比赛技术基础一致。若当前百炼工作空间仍提供 `gte-rerank-v2`，可将 `BAILIAN_RERANK_MODEL` 改为该值，接口协议不变。
 
@@ -473,7 +473,7 @@ Windows PowerShell：
 conda run -n before-choosing-demo python .\scripts\build_vector_index.py
 ```
 
-向量索引写入 `KNOWLEDGE_DB_PATH` 指定的本机 SQLite 文件，未建立向量索引时系统仍可使用 FTS5；远端 Embedding 暂时不可用时，职业推演会保留确定性的本地检索结果。扩展 26 条查询后，纯向量 Hit@5=100%、MRR@5=94.6%，融合 + 重排 Hit@5=96.2%、MRR@5=87.8%，因此正式默认选择纯向量；融合 + 重排仍保留为可配置对照方案。
+向量索引写入 `KNOWLEDGE_DB_PATH` 指定的本机 SQLite 文件，未建立向量索引时系统仍可使用 FTS5；远端 Embedding 暂时不可用时，职业推演会保留确定性的本地检索结果。扩展 26 条查询后，纯向量 Hit@5=100%、MRR@5=94.6%，融合 + 重排 Hit@5=96.2%、MRR@5=87.8%。自适应实验仅对 12 条低置信度查询调用重排，结果 Hit@5=100%、MRR@5=94.6%，与纯向量持平且没有稳定增益，因此正式默认仍选择纯向量；自适应模式保留为可复现的低置信度路由方案。
 
 职业推演接口：
 
@@ -494,6 +494,22 @@ conda run -n before-choosing-demo python scripts/evaluate_rag.py --live
 ```
 
 评测集规模较小，用于本地回归和方向性比较；正式材料中的结论应同时记录资料版本、模型版本和调用日期。
+
+验证自适应路由时使用独立脚本。默认离线读取缓存，不产生费用；增加 `--live` 后，仅对低置信度查询调用配置的 Rerank，并将结果写入本地缓存：
+
+```bash
+conda run -n before-choosing-demo python scripts/evaluate_adaptive_rag.py
+conda run -n before-choosing-demo python scripts/evaluate_adaptive_rag.py --live
+```
+
+Windows PowerShell：
+
+```powershell
+conda run -n before-choosing-demo python .\scripts\evaluate_adaptive_rag.py
+conda run -n before-choosing-demo python .\scripts\evaluate_adaptive_rag.py --live
+```
+
+该实验报告写入 `evaluation-results/rag-adaptive-v1/`。自适应路由会保留向量 Top-K 候选集合，并固定向量 Top1，远端重排只能作为次级排序信号；若重排不可用或置信度不足，自动回退到向量结果。
 
 ### 统一评测与成本报告
 
