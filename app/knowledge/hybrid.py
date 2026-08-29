@@ -406,7 +406,6 @@ class HybridKnowledgeRetriever:
                 {
                     "model": model,
                     "dimension": dimension,
-                    "source_fingerprint": self.base.source_fingerprint,
                     "query": query,
                 }
             )
@@ -451,7 +450,6 @@ class HybridKnowledgeRetriever:
                     {
                         "model": model,
                         "dimension": dimension,
-                        "source_fingerprint": self.base.source_fingerprint,
                         "query": queries[index],
                     }
                 )
@@ -615,7 +613,6 @@ class HybridKnowledgeRetriever:
             {
                 "model": model,
                 "dimension": dimension,
-                "source_fingerprint": self.base.source_fingerprint,
                 "query": query,
             }
         )
