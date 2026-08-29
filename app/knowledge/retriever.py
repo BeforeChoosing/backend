@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
 from typing import Iterable
@@ -64,6 +64,7 @@ class KnowledgeRetriever:
         self.source_dir = Path(source_dir).expanduser()
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.last_diagnostics: dict[str, object] = {}
         self._ensure_index()
 
     def rebuild(self) -> int:
@@ -290,6 +291,74 @@ class KnowledgeRetriever:
             )
         scored.sort(key=lambda chunk: (-chunk.score, chunk.id))
         return scored[: max(1, min(limit, 100))]
+
+    def search_many(
+        self,
+        queries: Iterable[str],
+        *,
+        corpus: str,
+        limit: int = 5,
+        document_id: str | None = None,
+    ) -> list[KnowledgeChunk]:
+        """Fuse several lexical intents without concatenating their text."""
+
+        normalized_queries: list[str] = []
+        seen: set[str] = set()
+        for value in queries:
+            normalized = " ".join(str(value).split()).strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            normalized_queries.append(normalized)
+        bounded_limit = max(1, min(int(limit), 100))
+        if not normalized_queries:
+            self.last_diagnostics = {
+                "mode": "multi-query-empty",
+                "query_count": 0,
+                "vector_used": False,
+                "rerank_used": False,
+            }
+            return []
+
+        per_query: list[list[KnowledgeChunk]] = [
+            self.search(
+                query,
+                corpus=corpus,
+                document_id=document_id,
+                limit=max(20, bounded_limit),
+            )
+            for query in normalized_queries
+        ]
+        by_id = {
+            chunk.id: chunk
+            for chunks in per_query
+            for chunk in chunks
+        }
+        scores = {chunk_id: 0.0 for chunk_id in by_id}
+        per_query_ids: list[list[str]] = []
+        for query, chunks in zip(normalized_queries, per_query):
+            per_query_ids.append([chunk.id for chunk in chunks])
+            query_terms = set(_query_terms(query))
+            for rank, chunk in enumerate(chunks, start=1):
+                scores[chunk.id] += 1.0 / (60.0 + rank)
+                if query_terms.intersection(_query_terms(" ".join(chunk.heading_path))):
+                    scores[chunk.id] += 0.008
+
+        ordered = sorted(scores, key=lambda chunk_id: (-scores[chunk_id], chunk_id))
+        result = [replace(by_id[chunk_id], score=scores[chunk_id]) for chunk_id in ordered]
+        self.last_diagnostics = {
+            "mode": "multi-query-fts",
+            "query_count": len(normalized_queries),
+            "vector_used": False,
+            "rerank_used": False,
+            "embedding_batch_calls": 0,
+            "per_query_result_ids": per_query_ids,
+            "query_coverage": round(
+                sum(bool(ids) for ids in per_query_ids) / len(per_query_ids),
+                4,
+            ),
+        }
+        return result[:bounded_limit]
 
     @staticmethod
     def _row_to_chunk(row: sqlite3.Row, *, score: float = 0.0) -> KnowledgeChunk:

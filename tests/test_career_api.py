@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+import asyncio
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -46,6 +47,21 @@ class _FakeRetriever:
                 score=2.0,
             )
         ]
+
+
+class _FakeMultiRetriever(_FakeRetriever):
+    def __init__(self):
+        self.queries = []
+        self.last_diagnostics = {}
+
+    def search_many(self, queries, *args, **kwargs):
+        self.queries = list(queries)
+        chunk = self.search(*args, **kwargs)
+        self.last_diagnostics = {
+            "per_query_result_ids": [[chunk[0].id] for _ in self.queries],
+            "query_coverage": 1.0,
+        }
+        return chunk
 
 
 class _FakeCareerAgent:
@@ -102,6 +118,25 @@ def test_career_recommendation_uses_confirmed_cards_and_citations(tmp_path, monk
     assert payload["citations"][0]["source_locator"].startswith("jobs/")
 
 
+def test_career_recommendation_uses_structured_multi_query_retrieval(tmp_path, monkeypatch):
+    store = ProfileStore(tmp_path / "profile.db")
+    store.confirm_cards([CardProposal.model_validate(_card_payload())], trace_id="trace-multi")
+    retriever = _FakeMultiRetriever()
+    monkeypatch.setattr(career_api, "_profile_store", lambda: store)
+    monkeypatch.setattr(career_api, "_knowledge_retriever", lambda: retriever)
+    monkeypatch.setattr(career_api, "_career_agent", lambda: _FakeCareerAgent())
+
+    response = TestClient(app).post(
+        "/api/v1/career/recommendations",
+        json={"selected_card_ids": ["career-card-1"]},
+    )
+
+    assert response.status_code == 200
+    assert retriever.queries[0] == "AI 产品经理 岗位职责 能力要求 工作内容"
+    assert len(retriever.queries) == 2
+    assert "用户研究" in retriever.queries[1]
+
+
 def test_career_recommendation_rejects_unconfirmed_card(tmp_path, monkeypatch):
     monkeypatch.setattr(career_api, "_profile_store", lambda: ProfileStore(tmp_path / "profile.db"))
 
@@ -138,3 +173,32 @@ def test_career_recommendation_reuses_identical_model_result(tmp_path, monkeypat
     assert second.status_code == 200
     assert first.json() == second.json()
     assert agent.calls == 1
+
+
+def test_career_recommendation_drops_support_for_uncovered_card(tmp_path):
+    store = ProfileStore(tmp_path / "profile.db")
+    store.confirm_cards([CardProposal.model_validate(_card_payload())], trace_id="trace-guard")
+    cards = store.get_cards_by_ids(["career-card-1"])
+    chunk = _FakeRetriever().search("用户研究", corpus="career", limit=5)[0]
+    recommendation = _FakeCareerAgent()
+    raw = asyncio.run(
+        recommendation.recommend(
+            cards,
+            [chunk],
+            type("Task", (), {"id": "F-01", "title": "任务", "primary_skill": "模型评测"})(),
+            "依据能力卡选择",
+        )
+    )
+    guarded = career_api._apply_retrieval_coverage_guard(
+        raw,
+        cards,
+        [chunk],
+        SimpleNamespace(
+            last_diagnostics={
+                "per_query_result_ids": [["role-query"], []],
+            }
+        ),
+    )
+
+    assert guarded.supported == []
+    assert "用户研究" in guarded.unknowns[0]

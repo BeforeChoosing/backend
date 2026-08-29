@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
@@ -231,6 +232,300 @@ class HybridKnowledgeRetriever:
         }
         return fallback[:bounded_limit]
 
+    def search_many(
+        self,
+        queries: Sequence[str],
+        *,
+        corpus: str,
+        limit: int = 5,
+        document_id: str | None = None,
+    ) -> list[KnowledgeChunk]:
+        """Retrieve several focused intents with one batched embedding call.
+
+        Career recommendations are grounded by a role query and one query per
+        confirmed ability card.  Running those intents independently and
+        fusing their ranked candidates avoids the dilution caused by one long
+        concatenated query.  Query vectors are cached individually, while
+        missing vectors are sent through ``embed_many`` in one API request.
+        The final local MMR pass limits near-duplicate chunks so the citation
+        budget covers more distinct sections of the local knowledge base.
+        """
+
+        normalized_queries: list[str] = []
+        seen_queries: set[str] = set()
+        for value in queries:
+            normalized = " ".join(str(value).split()).strip()
+            if not normalized or normalized in seen_queries:
+                continue
+            seen_queries.add(normalized)
+            normalized_queries.append(normalized)
+        bounded_limit = max(1, min(int(limit), 100))
+        candidate_limit = max(self.candidate_limit, bounded_limit)
+        if not normalized_queries:
+            self.last_diagnostics = {
+                "mode": "multi-query-empty",
+                "query_count": 0,
+                "vector_used": False,
+                "rerank_used": False,
+            }
+            return []
+
+        lexical_lists: list[list[KnowledgeChunk]] = []
+        for query in normalized_queries:
+            lexical_lists.append(
+                self.base.search(
+                    query,
+                    corpus=corpus,
+                    document_id=document_id,
+                    limit=candidate_limit,
+                )
+            )
+
+        vector_lists: list[list[VectorHit]] = [[] for _ in normalized_queries]
+        vector_error = ""
+        embedding_batch_calls = 0
+        if self.index.ready:
+            try:
+                vectors, embedding_batch_calls = self._query_vectors(
+                    normalized_queries
+                )
+                vector_lists = [
+                    self.index.search(
+                        vector,
+                        corpus=corpus,
+                        document_id=document_id,
+                        model=getattr(self.settings, "bailian_embedding_model", None),
+                        dimension=getattr(
+                            self.settings, "bailian_embedding_dimension", None
+                        ),
+                        source_fingerprint=self.base.source_fingerprint,
+                        limit=candidate_limit,
+                    )
+                    for vector in vectors
+                ]
+            except Exception as exc:  # noqa: BLE001 - keep local FTS fallback
+                vector_error = str(exc)
+                logger.warning("local multi-query vector retrieval unavailable: %s", exc)
+
+        per_query_ids: list[list[str]] = []
+        for lexical, vector_hits in zip(lexical_lists, vector_lists):
+            per_query_ids.append(
+                self._merge_candidate_ids(
+                    lexical,
+                    vector_hits,
+                    limit=candidate_limit,
+                )
+            )
+        candidate_ids = list(
+            dict.fromkeys(chunk_id for ids in per_query_ids for chunk_id in ids)
+        )
+        candidates = self.base.get_chunks_by_ids(candidate_ids)
+        if not candidates:
+            self.last_diagnostics = {
+                "mode": "multi-query-none",
+                "query_count": len(normalized_queries),
+                "vector_used": any(vector_lists),
+                "rerank_used": False,
+                "embedding_batch_calls": embedding_batch_calls,
+                "per_query_result_ids": per_query_ids,
+                "query_coverage": 0.0,
+                "vector_error": vector_error,
+            }
+            return []
+
+        ranked = self._fuse_multi_query(
+            normalized_queries,
+            lexical_lists,
+            vector_lists,
+            candidates,
+            limit=bounded_limit,
+        )
+        query_coverage = sum(bool(ids) for ids in per_query_ids) / len(
+            per_query_ids
+        )
+        retriever_mode = str(
+            getattr(self.settings, "rag_retriever_mode", "vector")
+        ).lower()
+        rerank_used = False
+        adaptive_triggered = False
+        rerank_margin = 0.0
+        if retriever_mode in {"adaptive", "adaptive_rerank", "hybrid"}:
+            margins = [
+                self._vector_margin(hits)
+                for hits in vector_lists
+                if hits
+            ]
+            ambiguous = bool(margins) and min(margins) < self.adaptive_margin
+            adaptive_triggered = ambiguous
+            if retriever_mode == "hybrid" or ambiguous or query_coverage < 1.0:
+                combined_query = "；".join(normalized_queries)
+                reranked = self._try_rerank(combined_query, candidates, bounded_limit)
+                rerank_margin = self._rerank_margin(reranked)
+                if reranked is not None and rerank_margin >= self.adaptive_rerank_min_margin:
+                    ranked_ids = {chunk.id for chunk in ranked}
+                    reranked = [chunk for chunk in reranked if chunk.id in ranked_ids]
+                    ranked_by_id = {chunk.id: chunk for chunk in ranked}
+                    ranked = [ranked_by_id[chunk.id] for chunk in reranked]
+                    ranked.extend(
+                        chunk for chunk in ranked_by_id.values()
+                        if chunk.id not in {item.id for item in ranked}
+                    )
+                    ranked = ranked[:bounded_limit]
+                    rerank_used = True
+
+        self.last_diagnostics = {
+            "mode": (
+                "multi-query-adaptive-rerank"
+                if rerank_used
+                else "multi-query-vector"
+                if any(vector_lists)
+                else "multi-query-fts"
+            ),
+            "query_count": len(normalized_queries),
+            "vector_used": any(vector_lists),
+            "rerank_used": rerank_used,
+            "adaptive_rerank_triggered": adaptive_triggered,
+            "embedding_batch_calls": embedding_batch_calls,
+            "per_query_result_ids": per_query_ids,
+            "query_coverage": round(query_coverage, 4),
+            "rerank_margin": rerank_margin,
+            "vector_error": vector_error,
+        }
+        return ranked[:bounded_limit]
+
+    def _query_vectors(self, queries: Sequence[str]) -> tuple[list[list[float]], int]:
+        """Load cached query vectors and batch-embed only missing values."""
+
+        model = getattr(self.settings, "bailian_embedding_model", "")
+        dimension = int(getattr(self.settings, "bailian_embedding_dimension", 0))
+        vectors: list[list[float] | None] = [None] * len(queries)
+        missing_indices: list[int] = []
+        missing_queries: list[str] = []
+        for index, query in enumerate(queries):
+            cache_key = ModelResponseCache.fingerprint(
+                {
+                    "model": model,
+                    "dimension": dimension,
+                    "source_fingerprint": self.base.source_fingerprint,
+                    "query": query,
+                }
+            )
+            cached = self.cache.get("rag-query-embedding", cache_key)
+            vector = _read_vector(
+                cached.get("embedding") if cached else None,
+                dimension,
+            )
+            if vector:
+                vectors[index] = vector
+            else:
+                missing_indices.append(index)
+                missing_queries.append(query)
+
+        batch_calls = 0
+        if missing_queries:
+            embed_many = getattr(self.embedding_gateway, "embed_many", None)
+            if callable(embed_many):
+                generated = embed_many(missing_queries, text_type="query")
+                batch_size = max(
+                    1,
+                    min(
+                        int(getattr(self.settings, "bailian_embedding_batch_size", 20)),
+                        20,
+                    ),
+                )
+                batch_calls = (len(missing_queries) + batch_size - 1) // batch_size
+            else:
+                generated = self.embedding_gateway.embed(
+                    missing_queries,
+                    text_type="query",
+                )
+                batch_calls = 1
+            if len(generated) != len(missing_indices):
+                raise ValueError("Embedding 批量查询向量数量不正确。")
+            for index, raw_vector in zip(missing_indices, generated):
+                vector = _read_vector(raw_vector, dimension)
+                if not vector:
+                    raise ValueError("Embedding 批量查询向量为空或维度不正确。")
+                vectors[index] = vector
+                cache_key = ModelResponseCache.fingerprint(
+                    {
+                        "model": model,
+                        "dimension": dimension,
+                        "source_fingerprint": self.base.source_fingerprint,
+                        "query": queries[index],
+                    }
+                )
+                self.cache.set("rag-query-embedding", cache_key, {"embedding": vector})
+
+        if any(vector is None for vector in vectors):
+            raise ValueError("Embedding 批量查询缺少向量。")
+        return [vector for vector in vectors if vector is not None], batch_calls
+
+    @classmethod
+    def _fuse_multi_query(
+        cls,
+        queries: Sequence[str],
+        lexical_lists: Sequence[Sequence[KnowledgeChunk]],
+        vector_lists: Sequence[Sequence[VectorHit]],
+        candidates: Sequence[KnowledgeChunk],
+        *,
+        limit: int,
+    ) -> list[KnowledgeChunk]:
+        """Fuse per-intent rankings with weighted RRF and local MMR."""
+
+        by_id = {chunk.id: chunk for chunk in candidates}
+        fused: dict[str, float] = {chunk.id: 0.0 for chunk in candidates}
+        lexical_weight = 0.45
+        vector_weight = 1.0
+        for query, lexical, vector_hits in zip(queries, lexical_lists, vector_lists):
+            for rank, chunk in enumerate(vector_hits, start=1):
+                if chunk.chunk_id in fused:
+                    fused[chunk.chunk_id] += vector_weight / (60.0 + rank)
+            for rank, chunk in enumerate(lexical, start=1):
+                if chunk.id in fused:
+                    fused[chunk.id] += lexical_weight / (60.0 + rank)
+            query_terms = _tokenize(query)
+            for chunk_id, value in list(fused.items()):
+                chunk = by_id[chunk_id]
+                heading_terms = _tokenize(" ".join(chunk.heading_path))
+                if query_terms and query_terms.intersection(heading_terms):
+                    fused[chunk_id] = value + 0.008
+
+        ordered = sorted(fused, key=lambda chunk_id: (-fused[chunk_id], chunk_id))
+        ranked = [replace(by_id[chunk_id], score=fused[chunk_id]) for chunk_id in ordered]
+        return cls._mmr_select(ranked, limit=limit)
+
+    @classmethod
+    def _mmr_select(
+        cls,
+        candidates: Sequence[KnowledgeChunk],
+        *,
+        limit: int,
+        relevance_weight: float = 0.82,
+    ) -> list[KnowledgeChunk]:
+        if len(candidates) <= limit:
+            return list(candidates)
+        scores = [float(chunk.score) for chunk in candidates]
+        minimum = min(scores, default=0.0)
+        maximum = max(scores, default=1.0)
+        denominator = max(1e-9, maximum - minimum)
+        remaining = list(candidates)
+        selected: list[KnowledgeChunk] = []
+        while remaining and len(selected) < limit:
+            def mmr_score(chunk: KnowledgeChunk) -> tuple[float, float, str]:
+                relevance = (chunk.score - minimum) / denominator
+                redundancy = max(
+                    (_chunk_similarity(chunk, previous) for previous in selected),
+                    default=0.0,
+                )
+                value = relevance_weight * relevance - (1 - relevance_weight) * redundancy
+                return value, chunk.score, chunk.id
+
+            best = max(remaining, key=mmr_score)
+            selected.append(best)
+            remaining.remove(best)
+        return selected
+
     @staticmethod
     def _merge_candidate_ids(
         lexical: Sequence[KnowledgeChunk],
@@ -429,6 +724,29 @@ def _read_vector(value: Any, dimension: int) -> list[float]:
     if dimension > 0 and len(vector) != dimension:
         return []
     return vector
+
+
+_ASCII_TOKEN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]*")
+_CJK_TOKEN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]{2,}")
+
+
+def _tokenize(value: str) -> set[str]:
+    """Create a small deterministic token set for heading/MMR comparisons."""
+
+    tokens = {item.lower() for item in _ASCII_TOKEN_RE.findall(value)}
+    for run in _CJK_TOKEN_RE.findall(value):
+        tokens.add(run)
+        tokens.update(run[index : index + 2] for index in range(len(run) - 1))
+    return {token for token in tokens if len(token) >= 2}
+
+
+def _chunk_similarity(left: KnowledgeChunk, right: KnowledgeChunk) -> float:
+    left_tokens = _tokenize(" ".join(left.heading_path) + " " + left.content)
+    right_tokens = _tokenize(" ".join(right.heading_path) + " " + right.content)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    union = left_tokens | right_tokens
+    return len(left_tokens & right_tokens) / max(1, len(union))
 
 
 def _read_rerank_hits(

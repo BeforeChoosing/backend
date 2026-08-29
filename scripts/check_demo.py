@@ -73,8 +73,11 @@ def check_configuration(settings: Settings) -> CheckResult:
 def check_knowledge(settings: Settings) -> CheckResult:
     try:
         retriever = KnowledgeRetriever(settings.knowledge_dir, settings.knowledge_db_path)
-        results = retriever.search(
-            "AI 产品经理 用户研究 产品方案",
+        results = retriever.search_many(
+            [
+                "AI 产品经理 岗位职责 能力要求",
+                "AI 产品经理 用户研究 产品方案",
+            ],
             corpus="career",
             limit=3,
         )
@@ -91,7 +94,8 @@ def check_knowledge(settings: Settings) -> CheckResult:
     return CheckResult(
         "本地 RAG",
         True,
-        f"FTS5 已索引 {retriever.chunk_count} 个片段，本次返回 {len(results)} 条；{vector_detail}",
+        f"FTS5 已索引 {retriever.chunk_count} 个片段，多意图检索返回 {len(results)} 条，"
+        f"覆盖 {retriever.last_diagnostics.get('query_coverage', 0):.0%}；{vector_detail}",
     )
 
 

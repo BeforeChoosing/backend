@@ -262,3 +262,51 @@ def test_adaptive_mode_keeps_vector_for_confident_query(tmp_path):
     assert rerank.calls == []
     assert hybrid.last_diagnostics["mode"] == "adaptive-vector"
     assert hybrid.last_diagnostics["adaptive_rerank_triggered"] is False
+
+
+def test_multi_query_retrieval_batches_embeddings_and_reports_coverage(tmp_path):
+    retriever = _retriever(tmp_path)
+    settings = SimpleNamespace(
+        **vars(_settings()),
+        rag_retriever_mode="vector",
+        bailian_embedding_batch_size=20,
+    )
+    embedding = _FakeEmbeddingGateway()
+    VectorIndexBuilder(
+        retriever,
+        embedding,
+        model=settings.bailian_embedding_model,
+        dimension=settings.bailian_embedding_dimension,
+    ).build()
+    hybrid = HybridKnowledgeRetriever(
+        retriever.source_dir,
+        retriever.db_path,
+        settings=settings,
+        embedding_gateway=embedding,
+        rerank_gateway=_FailingRerankGateway(),
+        cache=ModelResponseCache(retriever.db_path),
+    )
+
+    calls_before = len(embedding.calls)
+    first = hybrid.search_many(
+        ["AI 产品经理 用户研究", "AI 产品经理 模型评测"],
+        corpus="career",
+        document_id="job-ai-product-manager-v1",
+        limit=2,
+    )
+    calls_after_first = len(embedding.calls)
+    second = hybrid.search_many(
+        ["AI 产品经理 用户研究", "AI 产品经理 模型评测"],
+        corpus="career",
+        document_id="job-ai-product-manager-v1",
+        limit=2,
+    )
+
+    assert len(first) == len(second) == 2
+    assert calls_after_first == calls_before + 1
+    assert len(embedding.calls) == calls_after_first
+    assert hybrid.last_diagnostics["mode"] == "multi-query-vector"
+    assert hybrid.last_diagnostics["query_count"] == 2
+    assert hybrid.last_diagnostics["embedding_batch_calls"] == 0
+    assert hybrid.last_diagnostics["query_coverage"] == 1.0
+    assert len(hybrid.last_diagnostics["per_query_result_ids"]) == 2
