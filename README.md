@@ -394,8 +394,12 @@ python scripts/finalize_sol_pair_reviews.py \
 ```
 
 只有证据引用有效、chosen/rejected 有真实差异且独立复核明确判定 `pair_valid=true` 的记录会进入
-`sol_dpo_pairs.local.jsonl`；其余记录保留在 `sol_pair_reviews.local.jsonl` 供人工抽检，不会被
-静默转成负样本。目标数据量为 120 条案例和尽可能多的有效对，实际 DPO 数量以校验结果为准。
+`sol_dpo_pairs.local.jsonl`；该文件已经是百炼可直接上传的 DPO JSONL，只包含 `messages`、
+`chosen`、`rejected` 三个顶层字段，且后两者均为 `role=assistant` 的消息对象。`case_id`、
+`task_id` 和复核元数据保留在 `sol_pair_reviews.local.jsonl`，不会混入上传文件。其余记录保留在
+`sol_pair_reviews.local.jsonl` 供人工抽检，不会被静默转成负样本。需要内部追踪记录时，可额外传入
+`--internal-dpo-output datasets/trial_agent/v1/sol_dpo_pairs.internal.local.jsonl`。目标数据量为
+120 条案例和尽可能多的有效对，实际 DPO 数量以校验结果为准。
 
 4. 导出 SFT 候选。默认只导出 `silver_auto`、`human_approved`、`gold` 和 `approved`；需要纳入已人工审核的异常记录时显式加 `--include-needs-review`：
 
@@ -408,7 +412,7 @@ python scripts/build_trial_sft_dataset.py \
   --output-dir datasets/trial_agent/v1/generated
 ```
 
-DPO 不从单条教师输出自动制造拒答样本。只有提供人工审核的 `chosen_evaluation` 与 `rejected_evaluation` pair 时，才会导出 `dpo-chatml-v1` 候选，避免把未审核的模型错误当作负样本：
+DPO 不从单条教师输出自动制造拒答样本。只有提供人工审核的 `chosen_evaluation` 与 `rejected_evaluation` pair 时，才会导出可直接上传百炼的 DPO ChatML 数据，避免把未审核的模型错误当作负样本：
 
 ```bash
 python scripts/export_trial_teacher_dataset.py \

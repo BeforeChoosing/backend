@@ -6,7 +6,11 @@ TrialAgent evaluation is prepared for SFT or DPO.
 """
 
 from app.training.cases import TrialCaseInput, case_fingerprint, load_case_inputs
-from app.training.export import export_dpo_records, export_sft_records
+from app.training.export import (
+    export_bailian_dpo_records,
+    export_dpo_records,
+    export_sft_records,
+)
 from app.training.generation import (
     CaseGenerator,
     GeneratedCaseResponse,
@@ -21,6 +25,7 @@ __all__ = [
     "case_fingerprint",
     "load_case_inputs",
     "export_dpo_records",
+    "export_bailian_dpo_records",
     "export_sft_records",
     "CaseGenerator",
     "GeneratedCaseResponse",

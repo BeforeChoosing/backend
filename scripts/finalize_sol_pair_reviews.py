@@ -21,7 +21,12 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from app.schemas.trial import TrialEvaluation  # noqa: E402
 from app.training.cases import TrialCaseInput, load_case_inputs  # noqa: E402
-from app.training.export import read_jsonl, to_dpo_record, write_jsonl  # noqa: E402
+from app.training.export import (  # noqa: E402
+    read_jsonl,
+    to_bailian_dpo_record,
+    to_dpo_record,
+    write_jsonl,
+)
 from app.training.validation import validate_evaluation  # noqa: E402
 from app.tasks.catalog import get_task_definition  # noqa: E402
 
@@ -46,6 +51,12 @@ def parse_args() -> argparse.Namespace:
         "--dpo-output",
         type=Path,
         default=Path("datasets/trial_agent/v1/sol_dpo_pairs.local.jsonl"),
+        help="可直接上传百炼的 DPO JSONL 输出；默认写入本地忽略路径",
+    )
+    parser.add_argument(
+        "--internal-dpo-output",
+        type=Path,
+        help="可选的内部 DPO 追踪记录（包含 case_id/task_id/metadata）",
     )
     parser.add_argument("--prompt-version", default="trial-teacher-v1")
     return parser.parse_args()
@@ -117,6 +128,7 @@ def main() -> int:
 
     review_rows: list[dict[str, Any]] = []
     dpo_rows: list[dict[str, Any]] = []
+    internal_dpo_rows: list[dict[str, Any]] = []
     counts = {"reviewed": 0, "pair_valid": 0, "exported": 0, "rejected": 0, "missing": 0}
     for index, case in enumerate(cases, 1):
         baseline = baseline_rows.get(case.case_id)
@@ -207,10 +219,15 @@ def main() -> int:
                 allow_raw_rejected=True,
             )
             if dpo_record is not None:
-                dpo_rows.append(dpo_record)
-                counts["exported"] += 1
+                upload_record = to_bailian_dpo_record(dpo_record)
+                if upload_record is not None:
+                    dpo_rows.append(upload_record)
+                    internal_dpo_rows.append(dpo_record)
+                    counts["exported"] += 1
     write_jsonl(args.review_output, review_rows)
     write_jsonl(args.dpo_output, dpo_rows)
+    if args.internal_dpo_output:
+        write_jsonl(args.internal_dpo_output, internal_dpo_rows)
     print(json.dumps({**counts, "review_output": str(args.review_output), "dpo_output": str(args.dpo_output)}, ensure_ascii=False))
     return 0 if counts["missing"] == 0 else 1
 

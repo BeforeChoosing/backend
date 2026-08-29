@@ -17,7 +17,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from app.config import get_settings  # noqa: E402
 from app.training.export import (  # noqa: E402
-    export_dpo_records,
+    export_bailian_dpo_records,
     export_sft_records,
     read_jsonl,
     write_jsonl,
@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
         "--dpo-output",
         type=Path,
         default=Path("datasets/trial_agent/v1/teacher_dpo.local.jsonl"),
-        help="DPO 候选输出；默认写入本地忽略路径",
+        help="可直接上传百炼的 DPO JSONL 输出；默认写入本地忽略路径",
     )
     parser.add_argument(
         "--prompt-version",
@@ -96,7 +96,7 @@ def main() -> int:
     )
 
     if args.dpo_input:
-        dpo_records, dpo_counts = export_dpo_records(
+        dpo_records, dpo_counts = export_bailian_dpo_records(
             dpo_rows,
             prompt_version=prompt_version,
         )

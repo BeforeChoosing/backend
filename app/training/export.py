@@ -214,6 +214,57 @@ def to_dpo_record(
     }
 
 
+def _assistant_message(value: Any) -> dict[str, str] | None:
+    """Normalize an internal DPO output to Bailian's assistant message shape."""
+
+    if isinstance(value, Mapping):
+        if value.get("role") not in (None, "assistant"):
+            return None
+        content = value.get("content")
+    else:
+        content = value
+    if not isinstance(content, str) or not content.strip():
+        return None
+    return {"role": "assistant", "content": content}
+
+
+def to_bailian_dpo_record(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Project an internal DPO row into the strict Bailian upload format.
+
+    ``case_id``, ``task_id`` and ``metadata`` are intentionally kept in the
+    internal review artifact but are not accepted by Bailian's DPO importer.
+    The importer also expects ``chosen`` and ``rejected`` to be assistant
+    message objects rather than serialized JSON strings.
+    """
+
+    messages = record.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return None
+    normalized_messages: list[dict[str, str]] = []
+    for message in messages:
+        if not isinstance(message, Mapping):
+            return None
+        role = message.get("role")
+        content = message.get("content")
+        if role not in {"system", "user", "assistant"}:
+            return None
+        if not isinstance(content, str) or not content.strip():
+            return None
+        normalized_messages.append({"role": str(role), "content": content})
+    if normalized_messages[-1]["role"] != "user":
+        return None
+
+    chosen = _assistant_message(record.get("chosen"))
+    rejected = _assistant_message(record.get("rejected"))
+    if chosen is None or rejected is None:
+        return None
+    return {
+        "messages": normalized_messages,
+        "chosen": chosen,
+        "rejected": rejected,
+    }
+
+
 def export_dpo_records(
     rows: Iterable[Mapping[str, Any]],
     *,
@@ -233,6 +284,29 @@ def export_dpo_records(
         records.append(record)
         counts["accepted"] += 1
     return records, counts
+
+
+def export_bailian_dpo_records(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    prompt_version: str,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Export DPO rows ready for direct upload to Bailian.
+
+    The internal exporter remains available for review/debugging artifacts;
+    this projection removes internal bookkeeping fields before upload.
+    """
+
+    internal_records, counts = export_dpo_records(rows, prompt_version=prompt_version)
+    upload_records: list[dict[str, Any]] = []
+    for internal_record in internal_records:
+        record = to_bailian_dpo_record(internal_record)
+        if record is None:
+            counts["accepted"] -= 1
+            counts["invalid"] += 1
+            continue
+        upload_records.append(record)
+    return upload_records, counts
 
 
 def write_jsonl(path: str | Path, rows: Iterable[Mapping[str, Any]]) -> Path:

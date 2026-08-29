@@ -5,7 +5,11 @@ from app.config import Settings
 from app.schemas.task_catalog import DynamicTrialAnswer
 from app.tasks.catalog import get_task_definition
 from app.training.cases import TrialCaseInput, load_case_inputs
-from app.training.export import export_dpo_records, export_sft_records
+from app.training.export import (
+    export_bailian_dpo_records,
+    export_dpo_records,
+    export_sft_records,
+)
 from app.training.generation import CaseGenerator
 from app.training.teacher import TeacherCache, TeacherLabeler
 from app.training.validation import validate_evaluation
@@ -269,6 +273,15 @@ def test_export_requires_review_for_needs_review_and_never_fabricates_dpo() -> N
     assert len(dpo_records) == 1
     assert dpo_counts["accepted"] == 1
     assert dpo_records[0]["metadata"]["format"] == "dpo-chatml-v1"
+
+    upload_records, upload_counts = export_bailian_dpo_records([pair], prompt_version="v1")
+    assert len(upload_records) == 1
+    assert upload_counts["accepted"] == 1
+    assert set(upload_records[0]) == {"messages", "chosen", "rejected"}
+    assert upload_records[0]["messages"][-1]["role"] == "user"
+    assert upload_records[0]["chosen"]["role"] == "assistant"
+    assert upload_records[0]["rejected"]["role"] == "assistant"
+    assert isinstance(upload_records[0]["chosen"]["content"], str)
 
 
 def test_review_assignments_sample_sol_once_and_reuse_manifest(tmp_path: Path) -> None:
