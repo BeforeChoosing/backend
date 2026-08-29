@@ -92,6 +92,32 @@ def _missing_queries(
     return missing
 
 
+def _prefill_missing_queries(
+    retriever: KnowledgeRetriever,
+    settings: Any,
+    queries: list[str],
+) -> tuple[int, int]:
+    """Batch-create missing query vectors once and persist them locally."""
+
+    if not queries:
+        return 0, 0
+    vectors = DashScopeEmbeddingGateway(settings).embed_many(queries, text_type="query")
+    if len(vectors) != len(queries):
+        raise ValueError("批量预热查询向量数量不正确。")
+    cache = ModelResponseCache(settings.knowledge_db_path)
+    for query, vector in zip(queries, vectors):
+        cache.set(
+            "rag-query-embedding",
+            _cache_key(retriever, settings, query),
+            {"embedding": vector},
+        )
+    batch_size = max(
+        1,
+        min(int(getattr(settings, "bailian_embedding_batch_size", 20)), 20),
+    )
+    return (len(queries) + batch_size - 1) // batch_size, len(queries)
+
+
 def _rank(results: list[Any], expected: str) -> int | None:
     target = expected.lower()
     for index, chunk in enumerate(results, 1):
@@ -146,6 +172,10 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    prefill_calls = 0
+    prefill_items = 0
+    if missing:
+        prefill_calls, prefill_items = _prefill_missing_queries(base, settings, missing)
 
     baseline = HybridKnowledgeRetriever(
         settings.knowledge_dir,
@@ -214,8 +244,8 @@ def main() -> int:
         "embedding_model": settings.bailian_embedding_model,
         "live": bool(args.live),
         "missing_vectors_before_run": missing,
-        "new_embedding_api_calls": counted_gateway.calls,
-        "new_embedding_items": counted_gateway.items,
+        "new_embedding_api_calls": prefill_calls + counted_gateway.calls,
+        "new_embedding_items": prefill_items + counted_gateway.items,
         "baseline_pure_vector": baseline_metrics,
         "v2_multi_query_rrf_mmr": v2_metrics,
         "delta": {
