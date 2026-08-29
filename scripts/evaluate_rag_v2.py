@@ -313,6 +313,11 @@ def main() -> int:
         "new_embedding_items": prefill_items + counted_gateway.items,
         "baseline_pure_vector": baseline_metrics,
         "v2_multi_query_rrf_mmr": v2_metrics,
+        "rrf_mmr_parameters": {
+            "rrf_k": v2.rrf_k,
+            "rrf_anchor_lexical_weight": v2.rrf_anchor_lexical_weight,
+            "mmr_relevance_weight": v2.mmr_relevance_weight,
+        },
         "by_suite": by_suite,
         "expanded_career_corpus": {
             "pure_vector": _metrics(expanded_baseline_ranks, args.limit),
@@ -350,6 +355,9 @@ def main() -> int:
         f"- RAG v2 Hit@{args.limit}：{v2_metrics[f'hit_at_{args.limit}']:.1%}\n"
         f"- 纯向量 MRR@{args.limit}：{baseline_metrics[f'mrr_at_{args.limit}']:.1%}\n"
         f"- RAG v2 MRR@{args.limit}：{v2_metrics[f'mrr_at_{args.limit}']:.1%}\n"
+        f"- RRF/MMR 参数：k={report['rrf_mmr_parameters']['rrf_k']:g}，"
+        f"anchor 词法权重={report['rrf_mmr_parameters']['rrf_anchor_lexical_weight']:g}，"
+        f"MMR relevance={report['rrf_mmr_parameters']['mmr_relevance_weight']:g}\n"
         f"- 扩展 career 语料 Hit@1：纯向量 {report['expanded_career_corpus']['pure_vector']['hit_at_1']:.1%}，"
         f"RAG v2 {report['expanded_career_corpus']['v2_multi_query_rrf_mmr']['hit_at_1']:.1%}\n"
         f"- 扩展 career 语料 Hit@{args.limit}：纯向量 {report['expanded_career_corpus']['pure_vector'][f'hit_at_{args.limit}']:.1%}，"

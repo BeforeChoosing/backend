@@ -65,6 +65,19 @@ class HybridKnowledgeRetriever:
                 )
             ),
         )
+        # These defaults are tuned on the expanded 84-query benchmark. Keep
+        # them on the retriever so the experiment and production path share
+        # exactly the same ranking parameters, while allowing local sweeps
+        # through environment-backed Settings fields.
+        self.rrf_k = max(1e-6, float(getattr(self.settings, "rag_rrf_k", 20.0)))
+        self.rrf_anchor_lexical_weight = max(
+            0.0,
+            float(getattr(self.settings, "rag_rrf_anchor_lexical_weight", 0.0)),
+        )
+        self.mmr_relevance_weight = min(
+            1.0,
+            max(0.0, float(getattr(self.settings, "rag_mmr_relevance_weight", 0.65))),
+        )
         self.last_diagnostics: dict[str, Any] = {}
 
     def search(
@@ -339,6 +352,9 @@ class HybridKnowledgeRetriever:
             vector_lists,
             candidates,
             limit=bounded_limit,
+            rrf_k=self.rrf_k,
+            anchor_lexical_weight=self.rrf_anchor_lexical_weight,
+            mmr_relevance_weight=self.mmr_relevance_weight,
         )
         query_coverage = sum(bool(ids) for ids in per_query_ids) / len(
             per_query_ids
@@ -389,6 +405,9 @@ class HybridKnowledgeRetriever:
             "per_query_result_ids": per_query_ids,
             "query_coverage": round(query_coverage, 4),
             "rerank_margin": rerank_margin,
+            "rrf_k": self.rrf_k,
+            "rrf_anchor_lexical_weight": self.rrf_anchor_lexical_weight,
+            "mmr_relevance_weight": self.mmr_relevance_weight,
             "vector_error": vector_error,
         }
         return ranked[:bounded_limit]
@@ -468,6 +487,9 @@ class HybridKnowledgeRetriever:
         candidates: Sequence[KnowledgeChunk],
         *,
         limit: int,
+        rrf_k: float = 20.0,
+        anchor_lexical_weight: float = 0.0,
+        mmr_relevance_weight: float = 0.65,
     ) -> list[KnowledgeChunk]:
         """Fuse per-intent rankings with weighted RRF and local MMR."""
 
@@ -483,14 +505,16 @@ class HybridKnowledgeRetriever:
             # but must not drown out the card-specific intents that follow it.
             intent_weight = 0.05 if query_index == 0 else 1.0
             lexical_intent_weight = (
-                0.02 if has_vectors and query_index == 0 else lexical_weight
+                anchor_lexical_weight
+                if has_vectors and query_index == 0
+                else lexical_weight
             )
             for rank, chunk in enumerate(vector_hits, start=1):
                 if chunk.chunk_id in fused:
-                    fused[chunk.chunk_id] += intent_weight * vector_weight / (60.0 + rank)
+                    fused[chunk.chunk_id] += intent_weight * vector_weight / (rrf_k + rank)
             for rank, chunk in enumerate(lexical, start=1):
                 if chunk.id in fused:
-                    fused[chunk.id] += lexical_intent_weight / (60.0 + rank)
+                    fused[chunk.id] += lexical_intent_weight / (rrf_k + rank)
 
         ordered = sorted(fused, key=lambda chunk_id: (-fused[chunk_id], chunk_id))
         ranked = [replace(by_id[chunk_id], score=fused[chunk_id]) for chunk_id in ordered]
@@ -503,7 +527,12 @@ class HybridKnowledgeRetriever:
             for vector_hits in vector_lists[1:]
             if vector_hits
         ]
-        return cls._mmr_select(ranked, limit=limit, pinned_ids=pinned_ids)
+        return cls._mmr_select(
+            ranked,
+            limit=limit,
+            relevance_weight=mmr_relevance_weight,
+            pinned_ids=pinned_ids,
+        )
 
     @classmethod
     def _mmr_select(

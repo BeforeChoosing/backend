@@ -73,6 +73,9 @@ MULTIMODAL_MAX_PAGES=8
 RAG_RETRIEVER_MODE=vector
 RAG_CANDIDATE_LIMIT=20
 RAG_RERANK_LIMIT=5
+RAG_RRF_K=20
+RAG_RRF_ANCHOR_LEXICAL_WEIGHT=0
+RAG_MMR_RELEVANCE_WEIGHT=0.65
 LLM_REQUEST_TIMEOUT=45
 PROFILE_DB_PATH=profile.db
 AUTH_SESSION_TTL_HOURS=720
@@ -497,7 +500,7 @@ Windows PowerShell：
 conda run -n before-choosing-demo python .\scripts\build_vector_index.py
 ```
 
-向量索引写入 `KNOWLEDGE_DB_PATH` 指定的本机 SQLite 文件，未建立向量索引时系统仍可使用 FTS5；远端 Embedding 暂时不可用时，多查询链路会自动退回本地 FTS5，并保留覆盖诊断。多查询 RRF/MMR 用于解决生产请求中“多张能力卡被长查询稀释”和“引用片段重复”的问题；扩充后的最终精度结论以 `evaluation-results/rag-v3/report.md` 为准，报告会按岗位、Apple 案例、国际岗位、中国岗位、官方工作流和评测治理套件分别给出纯向量与 RAG v2 对比，不把未完成的中间结果表述为提升。自适应实验仅对低置信度意图调用重排，仍保持成本可控。
+向量索引写入 `KNOWLEDGE_DB_PATH` 指定的本机 SQLite 文件，未建立向量索引时系统仍可使用 FTS5；远端 Embedding 暂时不可用时，多查询链路会自动退回本地 FTS5，并保留覆盖诊断。多查询 RRF/MMR 用于解决生产请求中“多张能力卡被长查询稀释”和“引用片段重复”；当前默认 `RAG_RRF_K=20`、`RAG_RRF_ANCHOR_LEXICAL_WEIGHT=0`、`RAG_MMR_RELEVANCE_WEIGHT=0.65` 是在扩充后的 84 条评测集上以 Hit@1/Hit@5 不退化为约束调出的参数，报告会记录实际参数。自适应实验仅对低置信度意图调用重排，仍保持成本可控。
 
 职业推演接口：
 
@@ -525,12 +528,12 @@ RAG v2 的检索链路回归不需要百炼调用，覆盖查询拆分、批量�
 conda run -n before-choosing-demo pytest -q tests/test_query_planner.py tests/test_hybrid_retriever.py tests/test_career_api.py
 ```
 
-使用扩充后的 84 条分套件查询执行纯向量与 RAG v2 的同口径对比，报告写入 `evaluation-results/rag-v3/`；评测集覆盖原有 26 条职业查询、Apple 产品与评测案例、国际企业岗位、中国企业岗位、跨企业官方工作流以及评测治理方法。若缓存缺失，离线命令会直接退出，不会偷偷调用百炼：
+使用扩充后的 84 条分套件查询执行纯向量与 RAG v2 的同口径对比，报告写入 `evaluation-results/rag-tuned-v1/`；评测集覆盖原有 26 条职业查询、Apple 产品与评测案例、国际企业岗位、中国企业岗位、跨企业官方工作流以及评测治理方法。若缓存缺失，离线命令会直接退出，不会偷偷调用百炼：
 
 ```bash
 conda run -n before-choosing-demo python scripts/evaluate_rag_v2.py \
   --cases scripts/rag_eval_cases_v3.json \
-  --output-dir evaluation-results/rag-v3
+  --output-dir evaluation-results/rag-tuned-v1
 ```
 
 需要补齐缺失查询向量时，必须显式增加 `--live`：
@@ -539,20 +542,20 @@ conda run -n before-choosing-demo python scripts/evaluate_rag_v2.py \
 conda run -n before-choosing-demo python scripts/evaluate_rag_v2.py \
   --cases scripts/rag_eval_cases_v3.json \
   --live \
-  --output-dir evaluation-results/rag-v3
+  --output-dir evaluation-results/rag-tuned-v1
 ```
 
 Windows PowerShell：
 
 ```powershell
 conda run -n before-choosing-demo pytest -q tests/test_query_planner.py tests/test_hybrid_retriever.py tests/test_career_api.py
-conda run -n before-choosing-demo python .\scripts\evaluate_rag_v2.py --cases .\scripts\rag_eval_cases_v3.json --output-dir evaluation-results\rag-v3
+conda run -n before-choosing-demo python .\scripts\evaluate_rag_v2.py --cases .\scripts\rag_eval_cases_v3.json --output-dir evaluation-results\rag-tuned-v1
 ```
 
 需要补齐缺失查询向量时：
 
 ```powershell
-conda run -n before-choosing-demo python .\scripts\evaluate_rag_v2.py --cases .\scripts\rag_eval_cases_v3.json --live --output-dir evaluation-results\rag-v3
+conda run -n before-choosing-demo python .\scripts\evaluate_rag_v2.py --cases .\scripts\rag_eval_cases_v3.json --live --output-dir evaluation-results\rag-tuned-v1
 ```
 
 验证自适应路由时使用独立脚本。默认离线读取缓存，不产生费用；增加 `--live` 后，仅对低置信度查询调用配置的 Rerank，并将结果写入本地缓存：

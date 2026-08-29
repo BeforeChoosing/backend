@@ -92,6 +92,15 @@ class Settings:
     rag_retriever_mode: str = os.getenv("RAG_RETRIEVER_MODE", "vector")
     rag_candidate_limit: int = int(os.getenv("RAG_CANDIDATE_LIMIT", "20"))
     rag_rerank_limit: int = int(os.getenv("RAG_RERANK_LIMIT", "5"))
+    # Tuned on scripts/rag_eval_cases_v3.json: a shorter RRF tail and a
+    # relevance-heavy MMR pass improve MRR without changing Hit@1/Hit@5.
+    rag_rrf_k: float = float(os.getenv("RAG_RRF_K", "20"))
+    rag_rrf_anchor_lexical_weight: float = float(
+        os.getenv("RAG_RRF_ANCHOR_LEXICAL_WEIGHT", "0")
+    )
+    rag_mmr_relevance_weight: float = float(
+        os.getenv("RAG_MMR_RELEVANCE_WEIGHT", "0.65")
+    )
     rag_adaptive_margin: float = float(os.getenv("RAG_ADAPTIVE_MARGIN", "0.055"))
     rag_adaptive_rerank_min_margin: float = float(
         os.getenv("RAG_ADAPTIVE_RERANK_MIN_MARGIN", "0.02")
