@@ -60,6 +60,7 @@ datasets/trial_agent/v1/teacher_sft.local.jsonl
 datasets/trial_agent/v1/teacher_dpo.local.jsonl
 datasets/trial_agent/v1/reviewed_pairs.local.jsonl
 datasets/trial_agent/v1/*.local.jsonl
+datasets/trial_agent/v1/*.local.json
 datasets/trial_agent/v1/*.local/
 datasets/trial_agent/v1/sol_review_packets.local/
 datasets/trial_agent/v1/sol_review_results.local/
