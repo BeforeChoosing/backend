@@ -354,7 +354,7 @@ def main() -> int:
         f"RAG v2 {report['expanded_career_corpus']['v2_multi_query_rrf_mmr']['hit_at_1']:.1%}\n"
         f"- 扩展 career 语料 Hit@{args.limit}：纯向量 {report['expanded_career_corpus']['pure_vector'][f'hit_at_{args.limit}']:.1%}，"
         f"RAG v2 {report['expanded_career_corpus']['v2_multi_query_rrf_mmr'][f'hit_at_{args.limit}']:.1%}\n"
-        f"- 新增 Embedding 调用：{counted_gateway.calls} 次，文本 {counted_gateway.items} 条\n"
+        f"- 新增 Embedding 调用：{report['new_embedding_api_calls']} 次，文本 {report['new_embedding_items']} 条\n"
         f"- 平均不同章节占比：纯向量 {report['avg_unique_heading_ratio']['baseline']:.1%}，"
         f"RAG v2 {report['avg_unique_heading_ratio']['v2']:.1%}\n\n"
         + "## 分套件结果\n\n"
