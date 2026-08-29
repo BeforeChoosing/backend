@@ -22,6 +22,8 @@
 
 当前版本仅用于 macOS、Linux 或 Windows 电脑上的本机运行，不涉及服务器部署。后端默认监听 `127.0.0.1:8000`。
 
+正式模式需要先注册或登录本机账号。账号、密码哈希、会话令牌哈希和操作记录都保存在 `PROFILE_DB_PATH` 指定的本地 SQLite 文件中；原始密码和百炼密钥不会写入日志。演示模式不要求登录，也不会写入正式审计数据。
+
 ## 前置条件
 
 - macOS/Linux 或 Windows 已安装 Conda（Miniforge 或 Anaconda）。
@@ -73,6 +75,7 @@ RAG_CANDIDATE_LIMIT=20
 RAG_RERANK_LIMIT=5
 LLM_REQUEST_TIMEOUT=45
 PROFILE_DB_PATH=profile.db
+AUTH_SESSION_TTL_HOURS=720
 KNOWLEDGE_DIR=knowledge/public
 KNOWLEDGE_DB_PATH=knowledge.db
 CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
@@ -135,9 +138,26 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/health
 }
 ```
 
+## 正式模式登录与注册
+
+前端进入正式模式后，会先显示登录界面。首次使用可注册邮箱和至少 8 位密码；注册成功后自动建立本机会话。后续请求携带 bearer 会话令牌，退出后令牌立即失效。
+
+也可以用接口验证认证链路：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/auth/register \
+  -H 'X-App-Mode: use' -H 'Content-Type: application/json' \
+  -d '{"email":"person@example.com","password":"password-123"}'
+
+curl http://127.0.0.1:8000/api/v1/auth/me \
+  -H 'X-App-Mode: use' -H 'Authorization: Bearer <access_token>'
+```
+
+`POST /api/v1/auth/login`、`POST /api/v1/auth/register` 是登录前允许访问的接口；正式模式的其他业务接口没有有效会话时统一返回 `401`。健康检查和接口文档不受登录门禁影响。
+
 ## 一键验收
 
-先启动前端和后端，再在后端仓库根目录执行验收脚本。默认检查环境变量、百炼地址、本地 RAG、12 个固定任务、四个 Agent，以及前后端连通性；默认不会调用任何模型，不产生模型费用。
+先启动前端和后端，再在后端仓库根目录执行验收脚本。默认检查环境变量、百炼地址、本地 RAG、12 个固定任务、四个 Agent、正式模式登录门禁以及前后端连通性；默认不会调用任何模型，不产生模型费用。
 
 macOS/Linux：
 
@@ -622,16 +642,16 @@ python .\scripts\run_p0_experiments.py --live-sensitivity --concurrency 3
 
 ### 正式模式审计日志
 
-前端正式模式请求携带 `X-App-Mode: use`，后端中间件记录每个非健康检查请求的路径、状态、延迟和请求标识；模型网关同时记录 Qwen、Qwen-VL、Embedding、Rerank 的模型名、延迟与返回的 Token 用量。用户答案、上传材料和提示词正文不写入日志。演示模式不写入正式审计记录。
+前端正式模式请求携带 `X-App-Mode: use`、登录会话令牌和客户端请求标识。后端中间件按用户记录每个非健康检查请求的路径、状态、延迟和请求标识；模型网关同时记录 Qwen、Qwen-VL、Embedding、Rerank 的模型名、延迟与返回的 Token 用量。资料卡确认、修改、删除，职业推荐，任务保存、事件、Coach、提交评价以及前端点击/表单操作都会写入带用户 ID 的审计事件。正式版经历对话的完整文本和模型回复保存在本机 `profile_conversation_turns` 表，可通过 `GET /api/v1/profile/conversations` 按当前用户查看；材料只记录文件名、大小、哈希和提取结果摘要，不保存原始二进制文件。演示模式不写入正式审计记录。
 
 查看用量摘要：
 
 ```bash
-curl -H "X-App-Mode: use" http://localhost:8000/api/v1/audit/usage
-curl -H "X-App-Mode: use" http://localhost:8000/api/v1/audit/events?limit=50
+curl -H "X-App-Mode: use" -H "Authorization: Bearer <access_token>" http://localhost:8000/api/v1/audit/usage
+curl -H "X-App-Mode: use" -H "Authorization: Bearer <access_token>" http://localhost:8000/api/v1/audit/events?limit=50
 ```
 
-页面点击和表单变更由前端以 `ui_action` 事件记录，后端接口调用由 `http_request` 事件记录，二者共享客户端请求标识，可用于复盘完整操作链路。
+页面点击和表单变更由前端以 `ui_action` 事件记录，后端接口调用由 `http_request` 事件记录，二者共享客户端请求标识，可用于复盘完整操作链路。审计查询只返回当前登录账号的事件。
 
 ## 本地画像持久化
 

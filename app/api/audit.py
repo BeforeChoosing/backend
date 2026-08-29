@@ -5,6 +5,7 @@ from fastapi import APIRouter, Header, Query
 from app.config import get_settings
 from app.schemas.audit import AuditEventRequest, AuditEventResponse, AuditUsageSummary
 from app.services.audit_log import AuditLogStore
+from app.services.request_context import get_request_context
 
 
 router = APIRouter(prefix="/audit", tags=["audit"])
@@ -25,6 +26,7 @@ def create_audit_event(
     event_id = _store().record(
         event_type="ui_action",
         app_mode="use",
+        user_id=get_request_context().user_id,
         request_id=x_client_request_id,
         action=request.action,
         metadata={"target": request.target, **request.metadata},
@@ -35,7 +37,9 @@ def create_audit_event(
 @router.get("/usage", response_model=AuditUsageSummary)
 def get_audit_usage(x_app_mode: str = Header(default="unknown")) -> AuditUsageSummary:
     mode = "use" if x_app_mode.strip().lower() == "use" else "unknown"
-    return AuditUsageSummary.model_validate(_store().usage_summary(app_mode=mode))
+    return AuditUsageSummary.model_validate(
+        _store().usage_summary(app_mode=mode, user_id=get_request_context().user_id or None)
+    )
 
 
 @router.get("/events")
@@ -44,4 +48,8 @@ def list_audit_events(
     x_app_mode: str = Header(default="unknown"),
 ) -> list[dict]:
     mode = "use" if x_app_mode.strip().lower() == "use" else "unknown"
-    return _store().recent(limit=limit, app_mode=mode)
+    return _store().recent(
+        limit=limit,
+        app_mode=mode,
+        user_id=get_request_context().user_id or None,
+    )

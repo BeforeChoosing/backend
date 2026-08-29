@@ -10,6 +10,9 @@ from dataclasses import dataclass
 class RequestContext:
     app_mode: str = "unknown"
     request_id: str = ""
+    user_id: str = ""
+    user_email: str = ""
+    user_name: str = ""
 
 
 _context: ContextVar[RequestContext] = ContextVar(

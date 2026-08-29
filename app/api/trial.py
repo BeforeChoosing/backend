@@ -34,6 +34,7 @@ from app.schemas.task_catalog import (
     TrialTaskRecommendationRequest,
 )
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
+from app.services.audit_log import record_business_event
 from app.services.ability_matching import evaluate_card_play_round
 from app.services.dynamic_trial_store import DynamicTrialStore
 from app.services.model_response_cache import ModelResponseCache
@@ -74,6 +75,21 @@ def _dynamic_trial_store() -> DynamicTrialStore:
 
 def _model_cache() -> ModelResponseCache:
     return ModelResponseCache(_profile_store().db_path)
+
+
+def _record_trial_event(
+    action: str,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    try:
+        record_business_event(
+            get_settings().profile_db_path,
+            event_type="trial_operation",
+            action=action,
+            metadata=metadata,
+        )
+    except Exception:  # noqa: BLE001 - audit must not block task work
+        logger.exception("failed to record trial event action=%s", action)
 
 
 def _dynamic_answer_cache_payload(answer: DynamicTrialAnswer) -> dict:
@@ -120,12 +136,21 @@ def create_trial_recommendation(
     if len(cards) != len(selected_ids):
         raise HTTPException(status_code=422, detail="只能使用已确认的能力卡选择试路任务。")
     try:
-        return recommend_trial_task(
+        recommendation = recommend_trial_task(
             cards,
             profile_store.get_completed_task_ids(),
             evidence_records=profile_store.get_evidence_records(),
             target_role=request.target_role,
         )
+        _record_trial_event(
+            "trial.recommendation.select",
+            {
+                "selected_card_ids": selected_ids,
+                "target_role": request.target_role,
+                "task_id": recommendation.selected_task.id,
+            },
+        )
+        return recommendation
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -135,7 +160,12 @@ def create_dynamic_trial_session(
     request: DynamicTrialSessionCreateRequest,
 ) -> DynamicTrialSession:
     get_task_definition(request.task_id)
-    return _dynamic_trial_store().create_session(request.task_id)
+    session = _dynamic_trial_store().create_session(request.task_id)
+    _record_trial_event(
+        "trial.session.create",
+        {"session_id": session.id, "task_id": session.task_id},
+    )
+    return session
 
 
 @router.get("/workbench/sessions/{session_id}", response_model=DynamicTrialSession)
@@ -154,7 +184,20 @@ def save_dynamic_trial_answer(
         _normalize_card_play(session.task_id, request.answer, profile_store)
         if request.answer.card_play_completed:
             _validate_card_play(session.task_id, request.answer, profile_store)
-        return _dynamic_trial_store().save_answer(session_id, request.answer)
+        session = _dynamic_trial_store().save_answer(session_id, request.answer)
+        _record_trial_event(
+            "trial.answer.save",
+            {
+                "session_id": session_id,
+                "task_id": session.task_id,
+                "selected_card_count": len(session.answer.selected_card_ids),
+                "completed_step_count": len(
+                    [value for value in session.answer.step_answers.values() if value.strip()]
+                ),
+                "card_play_completed": session.answer.card_play_completed,
+            },
+        )
+        return session
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="试路会话不存在。") from exc
     except ValueError as exc:
@@ -164,7 +207,12 @@ def save_dynamic_trial_answer(
 @router.post("/workbench/sessions/{session_id}/event", response_model=DynamicTrialSession)
 def reveal_dynamic_trial_event(session_id: str) -> DynamicTrialSession:
     try:
-        return _dynamic_trial_store().reveal_event(session_id)
+        session = _dynamic_trial_store().reveal_event(session_id)
+        _record_trial_event(
+            "trial.event.reveal",
+            {"session_id": session_id, "task_id": session.task_id},
+        )
+        return session
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="试路会话不存在。") from exc
 
@@ -223,6 +271,17 @@ async def submit_dynamic_trial_session(session_id: str) -> DynamicTrialSession:
             )
             submitted = _dynamic_trial_store().submit(session_id, observed_evidence, evaluation)
             profile_store.record_observed_evidence(session_id, observed_evidence, evaluation)
+            _record_trial_event(
+                "trial.submit.evaluate",
+                {
+                    "session_id": session_id,
+                    "task_id": task.id,
+                    "observed_level": observed_evidence.observed_level,
+                    "confidence": observed_evidence.confidence,
+                    "evaluation_status": evaluation.verification.status if evaluation.verification else None,
+                    "reflection_mode": reflection.generation_mode,
+                },
+            )
             return submitted
         except LLMGatewayError as exc:
             logger.warning("dynamic trial evaluation failed session_id=%s reason=%s", session_id, exc)
@@ -371,9 +430,13 @@ def use_dynamic_trial_coach(
         used_at=datetime.now(timezone.utc),
     )
     try:
-        _dynamic_trial_store().record_coach_usage(session_id, usage)
+        session = _dynamic_trial_store().record_coach_usage(session_id, usage)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _record_trial_event(
+        "trial.coach.use",
+        {"session_id": session_id, "task_id": task.id, "level": request.level},
+    )
     return DynamicTrialCoachResponse(prompt=prompt, usage=usage)
 
 

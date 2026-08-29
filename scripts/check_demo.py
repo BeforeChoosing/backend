@@ -145,6 +145,25 @@ def check_http(name: str, url: str, *, expect_json_status: bool = False) -> Chec
     return CheckResult(name, True, f"{url} 可访问")
 
 
+def check_formal_auth_gate(health_url: str) -> CheckResult:
+    """Verify that a formal business endpoint rejects anonymous access."""
+
+    parsed = urlparse(health_url)
+    path = parsed.path.rsplit("/", 1)[0] + "/profile/cards"
+    url = parsed._replace(path=path, query="", fragment="").geturl()
+    request = urllib.request.Request(url, headers={"X-App-Mode": "use"})
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            status_code = response.status
+    except urllib.error.HTTPError as exc:
+        status_code = exc.code
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return CheckResult("正式模式登录门禁", False, f"无法连接 {url}：{exc}")
+    if status_code != 401:
+        return CheckResult("正式模式登录门禁", False, f"匿名请求返回 HTTP {status_code}，应为 401")
+    return CheckResult("正式模式登录门禁", True, "正式业务接口已拒绝未登录请求")
+
+
 def check_live_qwen(settings: Settings) -> CheckResult:
     try:
         payload = DashScopeQwenGateway(settings).generate_json(
@@ -236,6 +255,7 @@ def main() -> int:
         results.extend(
             [
                 check_http("后端服务", args.backend_url, expect_json_status=True),
+                check_formal_auth_gate(args.backend_url),
                 check_http("前端服务", args.frontend_url),
             ]
         )

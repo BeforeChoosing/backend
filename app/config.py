@@ -57,6 +57,7 @@ class Settings:
     multimodal_max_pages: int = int(os.getenv("MULTIMODAL_MAX_PAGES", "8"))
     request_timeout_seconds: float = float(os.getenv("LLM_REQUEST_TIMEOUT", "45"))
     profile_db_path: str = os.getenv("PROFILE_DB_PATH", "profile.db")
+    auth_session_ttl_hours: int = int(os.getenv("AUTH_SESSION_TTL_HOURS", str(24 * 30)))
     knowledge_dir: str = os.getenv("KNOWLEDGE_DIR", "knowledge/public")
     knowledge_db_path: str = os.getenv("KNOWLEDGE_DB_PATH", "knowledge.db")
     bailian_embedding_url: str = _env_or_default(

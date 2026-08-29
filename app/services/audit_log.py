@@ -1,7 +1,8 @@
 """Local audit and usage log for formal-mode operations.
 
-Only request metadata is persisted. User answers, uploaded material contents,
-and model prompts are deliberately excluded from this table.
+The audit table stores who performed an operation, when it happened, the
+request trace and bounded metadata. Large or sensitive payloads are kept in
+their dedicated local business tables rather than being copied into metadata.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ class AuditLogStore:
                     created_at TEXT NOT NULL,
                     event_type TEXT NOT NULL,
                     app_mode TEXT NOT NULL,
+                    user_id TEXT,
                     request_id TEXT,
                     action TEXT NOT NULL,
                     method TEXT,
@@ -47,8 +49,17 @@ class AuditLogStore:
                 )
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(audit_events)").fetchall()
+            }
+            if "user_id" not in columns:
+                connection.execute("ALTER TABLE audit_events ADD COLUMN user_id TEXT")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_audit_events_created_at ON audit_events(created_at)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_audit_events_user ON audit_events(user_id)"
             )
 
     def record(
@@ -57,6 +68,7 @@ class AuditLogStore:
         event_type: str,
         app_mode: str,
         action: str,
+        user_id: str = "",
         request_id: str = "",
         method: str | None = None,
         path: str | None = None,
@@ -74,16 +86,17 @@ class AuditLogStore:
             connection.execute(
                 """
                 INSERT INTO audit_events (
-                    id, created_at, event_type, app_mode, request_id, action,
+                    id, created_at, event_type, app_mode, user_id, request_id, action,
                     method, path, status_code, duration_ms, model,
                     input_tokens, output_tokens, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
                     created_at,
                     event_type[:80],
                     app_mode[:20],
+                    user_id[:120] if user_id else None,
                     request_id[:120],
                     action[:200],
                     method[:12] if method else None,
@@ -98,21 +111,41 @@ class AuditLogStore:
             )
         return event_id
 
-    def recent(self, *, limit: int = 100, app_mode: str = "use") -> list[dict[str, Any]]:
+    def recent(
+        self,
+        *,
+        limit: int = 100,
+        app_mode: str = "use",
+        user_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         bounded_limit = max(1, min(int(limit), 500))
         with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT id, created_at, event_type, app_mode, request_id, action,
-                       method, path, status_code, duration_ms, model,
-                       input_tokens, output_tokens, metadata_json
-                FROM audit_events
-                WHERE app_mode = ?
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (app_mode, bounded_limit),
-            ).fetchall()
+            if user_id:
+                rows = connection.execute(
+                    """
+                    SELECT id, created_at, event_type, app_mode, user_id, request_id, action,
+                           method, path, status_code, duration_ms, model,
+                           input_tokens, output_tokens, metadata_json
+                    FROM audit_events
+                    WHERE app_mode = ? AND user_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (app_mode, user_id, bounded_limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT id, created_at, event_type, app_mode, user_id, request_id, action,
+                           method, path, status_code, duration_ms, model,
+                           input_tokens, output_tokens, metadata_json
+                    FROM audit_events
+                    WHERE app_mode = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (app_mode, bounded_limit),
+                ).fetchall()
         result: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
@@ -123,28 +156,39 @@ class AuditLogStore:
             result.append(item)
         return result
 
-    def usage_summary(self, *, app_mode: str = "use") -> dict[str, Any]:
+    def usage_summary(
+        self,
+        *,
+        app_mode: str = "use",
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
+        where = "app_mode = ?"
+        params: list[Any] = [app_mode]
+        if user_id:
+            where += " AND user_id = ?"
+            params.append(user_id)
         with self._connect() as connection:
             row = connection.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS event_count,
                        AVG(duration_ms) AS mean_duration_ms,
                        SUM(CASE WHEN event_type = 'model_call' THEN 1 ELSE 0 END) AS model_call_count,
                        AVG(CASE WHEN event_type = 'model_call' THEN duration_ms END) AS model_mean_duration_ms,
                        SUM(COALESCE(input_tokens, 0)) AS input_tokens,
                        SUM(COALESCE(output_tokens, 0)) AS output_tokens
-                FROM audit_events WHERE app_mode = ?
+                FROM audit_events WHERE {where}
                 """,
-                (app_mode,),
+                params,
             ).fetchone()
+            path_params = list(params)
             paths = connection.execute(
-                """
+                f"""
                 SELECT path, COUNT(*) AS count, AVG(duration_ms) AS mean_duration_ms
                 FROM audit_events
-                WHERE app_mode = ? AND event_type = 'http_request'
+                WHERE {where} AND event_type = 'http_request'
                 GROUP BY path ORDER BY count DESC
                 """,
-                (app_mode,),
+                path_params,
             ).fetchall()
         return {
             "app_mode": app_mode,
@@ -185,11 +229,38 @@ def record_model_call(
     AuditLogStore(db_path).record(
         event_type="model_call",
         app_mode=context.app_mode,
+        user_id=context.user_id,
         request_id=context.request_id,
         action=f"{service}:{model}",
         duration_ms=duration_ms,
         model=model,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        metadata=metadata,
+    )
+
+
+def record_business_event(
+    db_path: str | Path,
+    *,
+    event_type: str,
+    action: str,
+    metadata: Mapping[str, Any] | None = None,
+    status_code: int = 200,
+) -> str | None:
+    """Record a formal-mode business action using the current request identity."""
+
+    from app.services.request_context import get_request_context
+
+    context = get_request_context()
+    if context.app_mode != "use":
+        return None
+    return AuditLogStore(db_path).record(
+        event_type=event_type,
+        app_mode=context.app_mode,
+        user_id=context.user_id,
+        request_id=context.request_id,
+        action=action,
+        status_code=status_code,
         metadata=metadata,
     )

@@ -15,6 +15,7 @@ from app.schemas.career import (
     CareerSupport,
 )
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
+from app.services.audit_log import record_business_event
 from app.services.model_response_cache import ModelResponseCache
 from app.services.profile_store import ProfileStore
 from app.services.task_selector import recommend_trial_task
@@ -47,6 +48,30 @@ def _career_agent() -> CareerAgent:
 
 def _model_cache() -> ModelResponseCache:
     return ModelResponseCache(_profile_store().db_path)
+
+
+def _record_recommendation_event(
+    request: CareerRecommendationRequest,
+    recommendation: CareerRecommendation,
+    *,
+    cached: bool,
+) -> None:
+    try:
+        record_business_event(
+            get_settings().profile_db_path,
+            event_type="career_recommendation",
+            action="career.recommendation.generate",
+            metadata={
+                "selected_card_ids": sorted(dict.fromkeys(request.selected_card_ids)),
+                "target_role": request.target_role,
+                "next_task_id": recommendation.next_task_id,
+                "confidence": recommendation.confidence,
+                "citation_count": len(recommendation.citations),
+                "cached": cached,
+            },
+        )
+    except Exception:  # noqa: BLE001 - audit must not block career exploration
+        logger.exception("failed to record career recommendation event")
 
 
 def _apply_retrieval_coverage_guard(
@@ -159,12 +184,14 @@ async def create_career_recommendation(
             cached = _model_cache().get("career-recommendation", cache_key)
             if cached is not None:
                 try:
-                    return _apply_retrieval_coverage_guard(
+                    guarded = _apply_retrieval_coverage_guard(
                         CareerRecommendation.model_validate(cached),
                         cards,
                         retrieved,
                         retriever,
                     )
+                    _record_recommendation_event(request, guarded, cached=True)
+                    return guarded
                 except ValueError:
                     logger.warning("discarding invalid cached career recommendation")
 
@@ -185,6 +212,7 @@ async def create_career_recommendation(
                 cache_key,
                 recommendation.model_dump(mode="json"),
             )
+            _record_recommendation_event(request, recommendation, cached=False)
             return recommendation
     except HTTPException:
         raise
