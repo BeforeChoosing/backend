@@ -38,7 +38,7 @@ def error_response(status: int, detail=None, headers=None):
 
 async def http_error_handler(request: Request, exc: HTTPException):
     if exc.status_code >= 500:
-        log_event('request_failed', level='error', error=exc.__cause__ or exc,
+        log_event('request_failed', level='error', error=exc.__cause__ or exc, alert=True,
                   status_code=exc.status_code, error_code=ERRORS.get(exc.status_code, ('REQUEST_FAILED',))[0])
     return error_response(exc.status_code, exc.detail, exc.headers)
 

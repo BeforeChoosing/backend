@@ -26,7 +26,8 @@ _METHODS = {
 }
 
 
-def log_event(event: str, *, level: str = 'info', error: Exception | None = None, **fields):
+def log_event(event: str, *, level: str = 'info', error: Exception | None = None,
+              alert: bool = False, **fields):
     if level not in _METHODS:
         raise ValueError(f'unsupported log level: {level}')
     context = get_request_context()
@@ -46,3 +47,6 @@ def log_event(event: str, *, level: str = 'info', error: Exception | None = None
             for frame in traceback.extract_tb(error.__traceback__)[-8:]
         ]
     _METHODS[level](json.dumps(record, ensure_ascii=False))
+    if alert and level == 'error':
+        from app.services.error_alert import queue_error_alert
+        queue_error_alert(event, record)

@@ -91,7 +91,7 @@ async def audit_formal_mode_requests(request: Request, call_next):
             status_code = response.status_code
         return response
     except Exception as exc:
-        log_event('request_failed', level='error', error=exc, status_code=500,
+        log_event('request_failed', level='error', error=exc, alert=True, status_code=500,
                   error_code='INTERNAL_ERROR')
         response = error_response(500)
         return response
@@ -116,7 +116,7 @@ async def audit_formal_mode_requests(request: Request, call_next):
                     metadata={"client_request_id": client_request_id},
                 )
             except Exception as exc:  # Audit failure must be visible to operators.
-                log_event('audit_write_failed', level='error', error=exc)
+                log_event('audit_write_failed', level='error', error=exc, alert=True)
         if is_api and request.method != 'OPTIONS':
             route = request.scope.get('route')
             log_event('http_request', level='error' if status_code >= 500 else ('warn' if status_code >= 400 else 'info'),
