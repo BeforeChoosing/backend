@@ -51,7 +51,8 @@ def _send(api_key: str, recipient: str, sender: str, event: str, fields: dict) -
     request = urllib.request.Request(
         'https://api.resend.com/emails', method='POST',
         data=json.dumps(payload, ensure_ascii=False).encode(),
-        headers={'Authorization': 'Bearer ' + api_key, 'Content-Type': 'application/json'},
+        headers={'Authorization': 'Bearer ' + api_key, 'Content-Type': 'application/json',
+                 'User-Agent': 'before-choosing-alerts/1.0'},
     )
     # Failure intentionally stays inside the worker; it must not recurse into alerts.
     try:

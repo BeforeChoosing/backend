@@ -1,4 +1,5 @@
 from app.services import error_alert
+import json
 
 
 class ImmediateExecutor:
@@ -30,3 +31,29 @@ def test_alert_requires_complete_configuration(monkeypatch):
     monkeypatch.delenv('ERROR_ALERT_ENABLED', raising=False)
     monkeypatch.setattr(error_alert, '_executor', object())
     error_alert.queue_error_alert('request_failed', {'request_id': 'req'})
+
+
+def test_resend_request_has_explicit_user_agent(monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            return False
+        def read(self):
+            return json.dumps({'id': 'message-1'}).encode()
+
+    def urlopen(request, timeout):
+        captured['request'] = request
+        captured['timeout'] = timeout
+        return Response()
+
+    monkeypatch.setattr(error_alert.urllib.request, 'urlopen', urlopen)
+    message_id = error_alert._send(
+        'api-key', 'owner@example.com', 'alerts@example.com', 'test',
+        {'request_id': 'req-1', 'error_code': 'TEST'},
+    )
+    assert message_id == 'message-1'
+    assert captured['request'].get_header('User-agent') == 'before-choosing-alerts/1.0'
+    assert captured['timeout'] == 8
