@@ -34,7 +34,9 @@ class ProfileConversationMessage(BaseModel):
 
 
 class ProfileExplorationRequest(BaseModel):
-    experience_text: str = Field(min_length=20, max_length=12000)
+    # Exploration is a conversation: a user may begin with a brief greeting or
+    # question before sharing a full experience.
+    experience_text: str = Field(min_length=1, max_length=12000)
     messages: list[ProfileConversationMessage] = Field(default_factory=list, max_length=12)
     # The client may echo the dimensions already prompted by the server.  This
     # is optional so older clients remain compatible; coverage is still
@@ -58,7 +60,7 @@ class ProfileExplorationResponse(BaseModel):
 
 
 class ProfileProposalRequest(BaseModel):
-    experience_text: str = Field(min_length=20, max_length=12000)
+    experience_text: str = Field(min_length=1, max_length=12000)
     target_role: str | None = Field(default=None, max_length=120)
     existing_card_titles: list[str] = Field(default_factory=list, max_length=20)
 

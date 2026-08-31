@@ -43,6 +43,11 @@ def test_profile_agent_returns_pending_cards():
     assert response.card_proposals[0].source_refs == ["input:experience_text"]
 
 
+def test_profile_requests_accept_any_non_empty_user_input():
+    assert ProfileExplorationRequest(experience_text="你是谁").experience_text == "你是谁"
+    assert ProfileProposalRequest(experience_text="你是谁").experience_text == "你是谁"
+
+
 class InventedQuoteGateway(FakeGateway):
     def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
         payload = super().generate_json(system_prompt, user_prompt)

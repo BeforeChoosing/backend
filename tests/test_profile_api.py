@@ -149,3 +149,26 @@ def test_profile_exploration_server_owns_focus_and_readiness(tmp_path, monkeypat
     assert payload["focus_dimension"] == "decision"
     assert payload["ready_for_proposal"] is False
     assert payload["coverage"]["decision"] == "missing"
+
+
+def test_profile_exploration_accepts_a_short_conversational_opening(
+    tmp_path, monkeypatch, authenticated_client
+):
+    """The chat composer promises free-form input, including a brief opening."""
+    store = ProfileStore(tmp_path / "profile.db")
+    agent = _FakeProfileExplorationAgent()
+    monkeypatch.setattr(profile_api, "_profile_store", lambda: store)
+    monkeypatch.setattr(profile_api, "_profile_agent", lambda: agent)
+
+    response = authenticated_client.post(
+        "/api/v1/profile/exploration/messages",
+        json={
+            "experience_text": "你是谁",
+            "messages": [{"role": "user", "content": "你是谁"}],
+            "request_id": "request-short-opening",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["reply"]
+    assert agent.calls == 1
