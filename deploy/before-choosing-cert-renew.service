@@ -1,0 +1,7 @@
+[Unit]
+Description=Renew Before Choosing HTTPS certificate
+After=network-online.target nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/before-choosing-certbot/bin/certbot renew --quiet --deploy-hook "/usr/sbin/nginx -t && /usr/bin/systemctl reload nginx"
