@@ -1,10 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
 
 from app.api import career as career_api
-from app.main import app
 from app.knowledge.retriever import KnowledgeChunk
 from app.schemas.career import CareerRecommendation
 from app.schemas.profile import CardProposal
@@ -97,14 +95,14 @@ class _FakeCareerAgent:
         )
 
 
-def test_career_recommendation_uses_confirmed_cards_and_citations(tmp_path, monkeypatch):
+def test_career_recommendation_uses_confirmed_cards_and_citations(tmp_path, monkeypatch, authenticated_client):
     store = ProfileStore(tmp_path / "profile.db")
     store.confirm_cards([CardProposal.model_validate(_card_payload())], trace_id="trace-career")
     monkeypatch.setattr(career_api, "_profile_store", lambda: store)
     monkeypatch.setattr(career_api, "_knowledge_retriever", lambda: _FakeRetriever())
     monkeypatch.setattr(career_api, "_career_agent", lambda: _FakeCareerAgent())
 
-    response = TestClient(app).post(
+    response = authenticated_client.post(
         "/api/v1/career/recommendations",
         json={"selected_card_ids": ["career-card-1"]},
     )
@@ -118,7 +116,7 @@ def test_career_recommendation_uses_confirmed_cards_and_citations(tmp_path, monk
     assert payload["citations"][0]["source_locator"].startswith("jobs/")
 
 
-def test_career_recommendation_uses_structured_multi_query_retrieval(tmp_path, monkeypatch):
+def test_career_recommendation_uses_structured_multi_query_retrieval(tmp_path, monkeypatch, authenticated_client):
     store = ProfileStore(tmp_path / "profile.db")
     store.confirm_cards([CardProposal.model_validate(_card_payload())], trace_id="trace-multi")
     retriever = _FakeMultiRetriever()
@@ -126,7 +124,7 @@ def test_career_recommendation_uses_structured_multi_query_retrieval(tmp_path, m
     monkeypatch.setattr(career_api, "_knowledge_retriever", lambda: retriever)
     monkeypatch.setattr(career_api, "_career_agent", lambda: _FakeCareerAgent())
 
-    response = TestClient(app).post(
+    response = authenticated_client.post(
         "/api/v1/career/recommendations",
         json={"selected_card_ids": ["career-card-1"]},
     )
@@ -137,10 +135,10 @@ def test_career_recommendation_uses_structured_multi_query_retrieval(tmp_path, m
     assert "用户研究" in retriever.queries[1]
 
 
-def test_career_recommendation_rejects_unconfirmed_card(tmp_path, monkeypatch):
+def test_career_recommendation_rejects_unconfirmed_card(tmp_path, monkeypatch, authenticated_client):
     monkeypatch.setattr(career_api, "_profile_store", lambda: ProfileStore(tmp_path / "profile.db"))
 
-    response = TestClient(app).post(
+    response = authenticated_client.post(
         "/api/v1/career/recommendations",
         json={"selected_card_ids": ["not-confirmed"]},
     )
@@ -148,7 +146,7 @@ def test_career_recommendation_rejects_unconfirmed_card(tmp_path, monkeypatch):
     assert response.status_code == 422
 
 
-def test_career_recommendation_reuses_identical_model_result(tmp_path, monkeypatch):
+def test_career_recommendation_reuses_identical_model_result(tmp_path, monkeypatch, authenticated_client):
     store = ProfileStore(tmp_path / "profile.db")
     store.confirm_cards(
         [CardProposal.model_validate(_card_payload())],
@@ -158,7 +156,7 @@ def test_career_recommendation_reuses_identical_model_result(tmp_path, monkeypat
     monkeypatch.setattr(career_api, "_profile_store", lambda: store)
     monkeypatch.setattr(career_api, "_knowledge_retriever", lambda: _FakeRetriever())
     monkeypatch.setattr(career_api, "_career_agent", lambda: agent)
-    client = TestClient(app)
+    client = authenticated_client
 
     first = client.post(
         "/api/v1/career/recommendations",

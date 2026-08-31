@@ -39,6 +39,7 @@ from app.services.ability_matching import evaluate_card_play_round
 from app.services.dynamic_trial_store import DynamicTrialStore
 from app.services.model_response_cache import ModelResponseCache
 from app.services.profile_store import ProfileStore
+from app.services.user_data import user_data_path
 from app.services.trial_store import TrialStore
 from app.services.task_selector import recommend_trial_task
 from app.services.trial_scoring import TrialScoringService
@@ -54,7 +55,7 @@ _model_call_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
 
 def _trial_store() -> TrialStore:
-    return TrialStore(get_settings().profile_db_path)
+    return TrialStore(user_data_path(get_settings().profile_db_path))
 
 
 def _trial_agent() -> TrialAgent:
@@ -66,11 +67,11 @@ def _reflection_agent() -> ReflectionAgent:
 
 
 def _profile_store() -> ProfileStore:
-    return ProfileStore(get_settings().profile_db_path)
+    return ProfileStore(user_data_path(get_settings().profile_db_path))
 
 
 def _dynamic_trial_store() -> DynamicTrialStore:
-    return DynamicTrialStore(get_settings().profile_db_path)
+    return DynamicTrialStore(user_data_path(get_settings().profile_db_path))
 
 
 def _model_cache() -> ModelResponseCache:

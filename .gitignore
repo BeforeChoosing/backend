@@ -67,6 +67,12 @@ datasets/trial_agent/v1/sol_review_results.local/
 *.sqlite
 *.sqlite3
 *.db
+*.db.users/
+*.sqlite.users/
+*.sqlite3.users/
+*-wal
+*-shm
+*-journal
 *.log
 *.pid
 *.sock

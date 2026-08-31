@@ -32,6 +32,7 @@ from app.services.profile_exploration_controller import (
     apply_exploration_controller,
 )
 from app.services.profile_store import ProfileStore
+from app.services.user_data import user_data_path
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/profile", tags=["profile"])
@@ -41,7 +42,7 @@ _proposal_locks: dict[str, asyncio.Lock] = {}
 
 
 def _profile_store() -> ProfileStore:
-    return ProfileStore(get_settings().profile_db_path)
+    return ProfileStore(user_data_path(get_settings().profile_db_path))
 
 
 def _profile_agent() -> ProfileAgent:

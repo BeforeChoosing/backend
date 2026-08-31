@@ -99,7 +99,8 @@ def current_user() -> AuthUser:
 
 @router.post("/logout", response_model=AuthLogoutResponse)
 def logout(authorization: str = Header(default="")) -> AuthLogoutResponse:
-    token = authorization.removeprefix("Bearer ").strip()
+    _, _, token = authorization.partition(" ")
+    token = token.strip()
     _store().revoke_token(token)
     context = get_request_context()
     _record_auth_event(action="auth.logout", result="success", user_id=context.user_id, email=context.user_email)

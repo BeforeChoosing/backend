@@ -18,6 +18,7 @@ from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
 from app.services.audit_log import record_business_event
 from app.services.model_response_cache import ModelResponseCache
 from app.services.profile_store import ProfileStore
+from app.services.user_data import user_data_path
 from app.services.task_selector import recommend_trial_task
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ _recommendation_locks: dict[str, asyncio.Lock] = {}
 
 
 def _profile_store() -> ProfileStore:
-    return ProfileStore(get_settings().profile_db_path)
+    return ProfileStore(user_data_path(get_settings().profile_db_path))
 
 
 @lru_cache(maxsize=1)

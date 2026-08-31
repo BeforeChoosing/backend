@@ -126,7 +126,8 @@ def test_formal_api_requires_auth_and_persists_chat_trace(tmp_path: Path, monkey
     formal_headers = {"X-App-Mode": "use"}
 
     assert client.get("/api/v1/profile/cards", headers=formal_headers).status_code == 401
-    assert client.get("/api/v1/profile/cards", headers={"X-App-Mode": "demo"}).status_code == 200
+    assert client.get("/api/v1/profile/cards", headers={"X-App-Mode": "demo"}).status_code == 401
+    assert client.get("/api/v1/trial/catalog", headers={"X-App-Mode": "demo"}).status_code == 200
 
     registered = client.post(
         "/api/v1/auth/register",

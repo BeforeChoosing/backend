@@ -1,3 +1,4 @@
+import re
 import time
 from uuid import uuid4
 
@@ -22,32 +23,35 @@ from app.services.request_context import (
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.1.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=list(settings.cors_origins),
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
 
 
 @app.middleware("http")
 async def audit_formal_mode_requests(request: Request, call_next):
-    """Persist request metadata for every formal-mode web operation."""
+    """Authenticate private APIs independently of client-selected UI mode."""
 
     app_mode = request.headers.get("X-App-Mode", "unknown").strip().lower()
+    path = request.url.path.rstrip("/") or "/"
+    is_api = path == settings.api_prefix or path.startswith(settings.api_prefix + "/")
+    public_auth = request.method == "POST" and path in {
+        f"{settings.api_prefix}/auth/login", f"{settings.api_prefix}/auth/register",
+    }
+    public_read = request.method in {"GET", "HEAD"} and (
+        path == f"{settings.api_prefix}/health"
+        or re.fullmatch(
+            re.escape(settings.api_prefix) + r"/trial/(?:catalog(?:/[^/]+)?|tasks/[^/]+)",
+            path,
+        ) is not None
+    )
+    requires_auth = is_api and not public_auth and not public_read
+    # Any private API access is a real-mode operation. A forged/missing mode
+    # cannot disable either authentication or audit logging.
+    if requires_auth or public_auth:
+        app_mode = "use"
     request_id = request.headers.get("X-Client-Request-Id", "").strip() or uuid4().hex
     response = None
     status_code = 500
     authenticated_user = None
-    if app_mode == "use" and request.method != "OPTIONS":
-        path = request.url.path.rstrip("/") or "/"
-        public_paths = {
-            f"{settings.api_prefix}/health",
-            f"{settings.api_prefix}/auth/login",
-            f"{settings.api_prefix}/auth/register",
-        }
-        requires_auth = path.startswith(settings.api_prefix) and path not in public_paths
+    if request.method != "OPTIONS":
         if requires_auth:
             authorization = request.headers.get("Authorization", "")
             scheme, _, raw_token = authorization.partition(" ")
@@ -107,6 +111,18 @@ async def audit_formal_mode_requests(request: Request, call_next):
         reset_request_context(token)
         if response is not None:
             response.headers["X-Request-Id"] = request_id
+            if requires_auth or public_auth:
+                response.headers["Cache-Control"] = "no-store"
+
+
+# CORS wraps the auth middleware so browsers can receive its 401 responses.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(settings.cors_origins),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 
 app.include_router(health_router, prefix=settings.api_prefix)
