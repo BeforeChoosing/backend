@@ -7,10 +7,31 @@ from typing import Any
 
 from app.config import Settings
 from app.services.audit_log import record_model_call
+from app.services.llm_request_queue import (
+    LLMRequestCancelled,
+    get_llm_request_queue,
+)
+from app.services.request_context import get_request_context
 
 
 class LLMGatewayError(RuntimeError):
     """Raised when the configured Qwen gateway cannot produce a response."""
+
+
+class LLMGatewayTimeoutError(LLMGatewayError):
+    """Raised when an admitted DashScope request exceeds its upstream timeout."""
+
+
+class LLMGatewayCancelledError(LLMGatewayError):
+    """Raised after the user explicitly cancels their queued request."""
+
+
+def llm_error_status(error: LLMGatewayError) -> int:
+    if isinstance(error, LLMGatewayCancelledError):
+        return 499
+    if isinstance(error, LLMGatewayTimeoutError):
+        return 504
+    return 503
 
 
 class DashScopeQwenGateway:
@@ -49,17 +70,34 @@ class DashScopeQwenGateway:
             method="POST",
         )
 
+        context = get_request_context()
+        queue = get_llm_request_queue(
+            max_concurrency=getattr(self.settings, "llm_max_concurrency", 2),
+            max_requests_per_minute=getattr(
+                self.settings, "llm_max_requests_per_minute", 30
+            ),
+        )
         started = time.perf_counter()
         try:
-            with urllib.request.urlopen(
-                request, timeout=self.settings.request_timeout_seconds
-            ) as response:
-                raw_body = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")[:500]
-            raise LLMGatewayError(f"百炼请求失败（HTTP {exc.code}）：{body}") from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise LLMGatewayError(f"百炼请求超时或无法连接：{exc}") from exc
+            with queue.admission(request_id=context.request_id, user_id=context.user_id):
+                try:
+                    with urllib.request.urlopen(
+                        request, timeout=self.settings.request_timeout_seconds
+                    ) as response:
+                        raw_body = response.read().decode("utf-8")
+                except urllib.error.HTTPError as exc:
+                    body = exc.read().decode("utf-8", errors="replace")[:500]
+                    raise LLMGatewayError(f"百炼请求失败（HTTP {exc.code}）：{body}") from exc
+                except TimeoutError as exc:
+                    raise LLMGatewayTimeoutError("百炼响应超时，请稍后查看当前记录。") from exc
+                except urllib.error.URLError as exc:
+                    if isinstance(exc.reason, TimeoutError):
+                        raise LLMGatewayTimeoutError(
+                            "百炼响应超时，请稍后查看当前记录。"
+                        ) from exc
+                    raise LLMGatewayError(f"百炼请求无法连接：{exc}") from exc
+        except LLMRequestCancelled as exc:
+            raise LLMGatewayCancelledError(str(exc)) from exc
 
         try:
             response_payload = json.loads(raw_body)

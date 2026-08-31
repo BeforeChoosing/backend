@@ -20,7 +20,7 @@ from app.schemas.profile import (
     ProfileProposalResponse,
 )
 from app.schemas.multimodal import MultimodalEvidenceResponse
-from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
+from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError, llm_error_status
 from app.services.material_extractor import MaterialExtractionError, extract_material_text
 from app.services.model_response_cache import ModelResponseCache
 from app.services.multimodal_evidence import MultimodalEvidenceExtractor, MultimodalExtractionError
@@ -150,7 +150,7 @@ async def create_profile_exploration_message(
             return response
         except LLMGatewayError as exc:
             logger.warning("profile exploration failed trace_id=%s reason=%s", trace_id, exc)
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            raise HTTPException(status_code=llm_error_status(exc), detail=str(exc)) from exc
         except (ValueError, TypeError) as exc:
             logger.warning("profile exploration invalid trace_id=%s reason=%s", trace_id, exc)
             raise HTTPException(status_code=502, detail="本轮补充引导没有整理成功，请稍后重试。") from exc
@@ -216,7 +216,7 @@ async def extract_profile_multimodal_evidence(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LLMGatewayError as exc:
         logger.warning("multimodal evidence extraction failed: %s", exc)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=llm_error_status(exc), detail=str(exc)) from exc
     _record_business_event(
         "profile_material",
         "profile.material.multimodal_extract",
@@ -364,7 +364,7 @@ async def create_profile_proposal(
             return response
         except LLMGatewayError as exc:
             logger.warning("profile proposal failed trace_id=%s reason=%s", trace_id, exc)
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            raise HTTPException(status_code=llm_error_status(exc), detail=str(exc)) from exc
         except (ValueError, TypeError) as exc:
             logger.warning("profile proposal invalid trace_id=%s reason=%s", trace_id, exc)
             raise HTTPException(status_code=502, detail="模型输出未通过结构化校验，请稍后重试。") from exc

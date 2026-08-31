@@ -16,6 +16,7 @@ ERRORS = {
     413: ('PAYLOAD_TOO_LARGE', '材料过大，请将单个文件控制在 20MB 以内。'),
     422: ('VALIDATION_ERROR', '提交内容不完整或格式有误，请检查后重试。'),
     429: ('RATE_LIMITED', '操作有些频繁，请稍等片刻再试。'),
+    499: ('CLIENT_CANCELLED', '请求已取消。'),
     500: ('INTERNAL_ERROR', '服务暂时出现问题，请稍后重试。'),
     502: ('UPSTREAM_ERROR', '这次 AI 回复未能完成，请稍后重试。'),
     503: ('SERVICE_UNAVAILABLE', '服务暂时不可用，请稍后重试。'),
@@ -31,7 +32,7 @@ def error_response(status: int, detail=None, headers=None):
     request_id = get_request_context().request_id
     return JSONResponse(status_code=status, headers=headers, content={
         'detail': message, 'error': {'code': code, 'message': message,
-                                    'request_id': request_id, 'retryable': status in {429, 502, 503, 504}},
+                                    'request_id': request_id, 'retryable': status in {502, 503, 504}},
         'request_id': request_id,
     })
 

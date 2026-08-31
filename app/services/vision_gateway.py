@@ -9,8 +9,15 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from app.config import Settings
-from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
+from app.services.llm_gateway import (
+    DashScopeQwenGateway,
+    LLMGatewayCancelledError,
+    LLMGatewayError,
+    LLMGatewayTimeoutError,
+)
 from app.services.audit_log import record_model_call
+from app.services.llm_request_queue import LLMRequestCancelled, get_llm_request_queue
+from app.services.request_context import get_request_context
 
 
 @dataclass(frozen=True)
@@ -66,16 +73,29 @@ class DashScopeVisionGateway:
             method="POST",
         )
         started = time.perf_counter()
+        context = get_request_context()
+        queue = get_llm_request_queue(
+            max_concurrency=getattr(self.settings, "llm_max_concurrency", 2),
+            max_requests_per_minute=getattr(
+                self.settings, "llm_max_requests_per_minute", 30
+            ),
+        )
         try:
-            with urllib.request.urlopen(
-                request, timeout=self.settings.request_timeout_seconds
-            ) as response:
-                raw_body = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")[:500]
-            raise LLMGatewayError(f"百炼视觉请求失败（HTTP {exc.code}）：{body}") from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise LLMGatewayError(f"百炼视觉请求超时或无法连接：{exc}") from exc
+            with queue.admission(request_id=context.request_id, user_id=context.user_id):
+                try:
+                    with urllib.request.urlopen(
+                        request, timeout=self.settings.request_timeout_seconds
+                    ) as response:
+                        raw_body = response.read().decode("utf-8")
+                except urllib.error.HTTPError as exc:
+                    body = exc.read().decode("utf-8", errors="replace")[:500]
+                    raise LLMGatewayError(f"百炼视觉请求失败（HTTP {exc.code}）：{body}") from exc
+                except TimeoutError as exc:
+                    raise LLMGatewayTimeoutError("百炼视觉响应超时。") from exc
+                except urllib.error.URLError as exc:
+                    raise LLMGatewayError(f"百炼视觉请求无法连接：{exc}") from exc
+        except LLMRequestCancelled as exc:
+            raise LLMGatewayCancelledError(str(exc)) from exc
         try:
             response_payload = json.loads(raw_body)
         except json.JSONDecodeError as exc:

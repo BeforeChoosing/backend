@@ -14,7 +14,7 @@ from app.schemas.career import (
     CareerRecommendationRequest,
     CareerSupport,
 )
-from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
+from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError, llm_error_status
 from app.services.audit_log import record_business_event
 from app.services.model_response_cache import ModelResponseCache
 from app.services.profile_store import ProfileStore
@@ -222,7 +222,7 @@ async def create_career_recommendation(
         raise HTTPException(status_code=503, detail="岗位资料还没有准备好，请先建立本地索引。") from exc
     except LLMGatewayError as exc:
         logger.warning("career recommendation failed reason=%s", exc)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=llm_error_status(exc), detail=str(exc)) from exc
     except (ValueError, TypeError) as exc:
         logger.warning("career recommendation invalid reason=%s", exc)
         raise HTTPException(status_code=502, detail="这次建议没有整理成功，请稍后再试。") from exc

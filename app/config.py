@@ -55,7 +55,11 @@ class Settings:
     )
     bailian_vision_model: str = os.getenv("BAILIAN_VISION_MODEL", "qwen-vl-ocr")
     multimodal_max_pages: int = int(os.getenv("MULTIMODAL_MAX_PAGES", "8"))
-    request_timeout_seconds: float = float(os.getenv("LLM_REQUEST_TIMEOUT", "45"))
+    request_timeout_seconds: float = float(os.getenv("LLM_REQUEST_TIMEOUT", "90"))
+    llm_max_concurrency: int = int(os.getenv("LLM_MAX_CONCURRENCY", "2"))
+    llm_max_requests_per_minute: int = int(
+        os.getenv("LLM_MAX_REQUESTS_PER_MINUTE", "30")
+    )
     profile_db_path: str = os.getenv("PROFILE_DB_PATH", "profile.db")
     auth_session_ttl_hours: int = int(os.getenv("AUTH_SESSION_TTL_HOURS", str(24 * 30)))
     knowledge_dir: str = os.getenv("KNOWLEDGE_DIR", "knowledge/public")

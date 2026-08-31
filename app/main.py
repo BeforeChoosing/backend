@@ -13,6 +13,7 @@ from app.services.runtime_log import log_event
 from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
 from app.api.health import router as health_router
+from app.api.llm_queue import router as llm_queue_router
 from app.api.career import router as career_router
 from app.api.profile import router as profile_router
 from app.api.trial import router as trial_router
@@ -147,6 +148,7 @@ app.include_router(profile_router, prefix=settings.api_prefix)
 app.include_router(career_router, prefix=settings.api_prefix)
 app.include_router(trial_router, prefix=settings.api_prefix)
 app.include_router(audit_router, prefix=settings.api_prefix)
+app.include_router(llm_queue_router, prefix=settings.api_prefix)
 
 
 @app.get("/")

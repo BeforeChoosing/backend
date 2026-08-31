@@ -51,6 +51,25 @@ def test_auth_store_rejects_duplicate_and_bad_password(tmp_path: Path) -> None:
         raise AssertionError("bad password should be rejected")
 
 
+def test_register_api_rejects_existing_email_case_insensitively(tmp_path: Path, monkeypatch) -> None:
+    settings: Settings = replace(main_module.settings, profile_db_path=str(tmp_path / "profile.db"))
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(auth_api, "get_settings", lambda: settings)
+    client = TestClient(main_module.app)
+    first = client.post(
+        "/api/v1/auth/register",
+        json={"email": "Duplicate@Example.com", "password": "password-123"},
+    )
+    assert first.status_code == 201
+
+    duplicate = client.post(
+        "/api/v1/auth/register",
+        json={"email": "duplicate@example.com", "password": "password-456"},
+    )
+    assert duplicate.status_code == 409
+    assert "已经注册" in duplicate.json()["detail"]
+
+
 def test_formal_business_events_and_conversations_are_user_bound(tmp_path: Path) -> None:
     db_path = tmp_path / "profile.db"
     token = set_request_context(
