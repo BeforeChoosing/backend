@@ -34,7 +34,7 @@ def queue_error_alert(event: str, fields: dict) -> None:
     _executor.submit(_send, api_key, recipient, sender, event, safe)
 
 
-def _send(api_key: str, recipient: str, sender: str, event: str, fields: dict) -> None:
+def _send(api_key: str, recipient: str, sender: str, event: str, fields: dict) -> str | None:
     timestamp = datetime.now(timezone.utc).isoformat()
     rows = ''.join(
         f'<tr><th style="text-align:left;padding:6px 12px 6px 0">{escape(key)}</th>'
@@ -56,9 +56,10 @@ def _send(api_key: str, recipient: str, sender: str, event: str, fields: dict) -
     # Failure intentionally stays inside the worker; it must not recurse into alerts.
     try:
         with urllib.request.urlopen(request, timeout=8) as response:
-            response.read()
+            result = json.loads(response.read())
+            return str(result.get('id') or '') or None
     except Exception:
-        return
+        return None
 
 
 def _reset_for_tests() -> None:
