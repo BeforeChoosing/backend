@@ -119,7 +119,7 @@ async def audit_formal_mode_requests(request: Request, call_next):
                 log_event('audit_write_failed', level='error', error=exc)
         if is_api and request.method != 'OPTIONS':
             route = request.scope.get('route')
-            log_event('http_request', level='error' if status_code >= 500 else ('warning' if status_code >= 400 else 'info'),
+            log_event('http_request', level='error' if status_code >= 500 else ('warn' if status_code >= 400 else 'info'),
                       method=request.method, route=getattr(route, 'path', 'unmatched'),
                       status_code=status_code, duration_ms=round(duration_ms, 2),
                       client_request_id=client_request_id)

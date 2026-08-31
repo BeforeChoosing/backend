@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.api import auth
+from app.services.runtime_log import log_event
 
 
 def test_server_owns_request_id_and_returns_stable_auth_error(tmp_path, monkeypatch):
@@ -55,3 +56,14 @@ def test_unhandled_error_is_masked_and_structured(tmp_path, monkeypatch):
     assert response.status_code == 500
     assert response.json()['error']['code'] == 'INTERNAL_ERROR'
     assert marker not in response.text
+
+
+def test_runtime_log_levels_are_explicit_and_bounded():
+    for level in ('debug', 'info', 'warn', 'error'):
+        log_event('level_test', level=level)
+    try:
+        log_event('invalid_level', level='warning')
+    except ValueError as exc:
+        assert 'unsupported log level' in str(exc)
+    else:
+        raise AssertionError('unknown log levels must be rejected')
