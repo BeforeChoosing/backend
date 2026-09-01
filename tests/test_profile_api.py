@@ -107,6 +107,20 @@ class _FakeProfileExplorationAgent:
             ready_for_proposal=False,
         )
 
+    def explore_stream(self, request, trace_id, *, on_delta):
+        self.calls += 1
+        on_delta('{"reply":"补充你如何')
+        on_delta('根据访谈确定范围。","focus_dimension":"decision"}')
+        return ProfileExplorationResponse(
+            trace_id=trace_id,
+            reply="补充你如何根据访谈确定范围。",
+            focus_dimension="decision",
+            evidence_found=["负责用户访谈"],
+            evidence_gap="仍缺少范围取舍的判断依据。",
+            potential_hypotheses=["可能具备产品范围判断潜能，仍需验证。"],
+            ready_for_proposal=False,
+        )
+
 
 def test_profile_exploration_reuses_identical_model_result(tmp_path, monkeypatch, authenticated_client):
     store = ProfileStore(tmp_path / "profile.db")
@@ -171,4 +185,29 @@ def test_profile_exploration_accepts_a_short_conversational_opening(
 
     assert response.status_code == 200
     assert response.json()["reply"]
+    assert agent.calls == 1
+
+
+def test_profile_exploration_stream_emits_reply_before_final_payload(
+    tmp_path, monkeypatch, authenticated_client
+):
+    store = ProfileStore(tmp_path / "profile.db")
+    agent = _FakeProfileExplorationAgent()
+    monkeypatch.setattr(profile_api, "_profile_store", lambda: store)
+    monkeypatch.setattr(profile_api, "_profile_agent", lambda: agent)
+
+    response = authenticated_client.post(
+        "/api/v1/profile/exploration/messages/stream",
+        json={
+            "experience_text": "我负责访谈用户并整理需求。",
+            "messages": [{"role": "user", "content": "我访谈了十五位用户。"}],
+            "request_id": "request-stream-001",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text.index("event: delta") < response.text.index("event: done")
+    assert '"text":"补充你如何"' in response.text
+    assert '"reply":"补充你如何根据访谈确定范围。"' in response.text
     assert agent.calls == 1

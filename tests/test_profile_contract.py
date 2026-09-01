@@ -5,7 +5,10 @@ from app.schemas.profile import ProfileExplorationRequest, ProfileProposalReques
 
 
 class FakeGateway:
-    def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
+    class settings:
+        qwen_fast_model = "qwen3.6-flash"
+
+    def generate_json(self, system_prompt: str, user_prompt: str, **kwargs) -> dict:
         return {
             "experience": {
                 "title": "校园项目",
@@ -49,8 +52,8 @@ def test_profile_requests_accept_any_non_empty_user_input():
 
 
 class InventedQuoteGateway(FakeGateway):
-    def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
-        payload = super().generate_json(system_prompt, user_prompt)
+    def generate_json(self, system_prompt: str, user_prompt: str, **kwargs) -> dict:
+        payload = super().generate_json(system_prompt, user_prompt, **kwargs)
         payload["card_proposals"][0]["claim_level"] = "fact"
         payload["card_proposals"][0]["evidence_type"] = "documented_fact"
         payload["card_proposals"][0]["evidence_quote"] = "获得全国一等奖"
@@ -70,7 +73,11 @@ def test_profile_agent_downgrades_unverifiable_quote():
 
 
 class ExplorationGateway:
-    def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
+    class settings:
+        qwen_fast_model = "qwen3.6-flash"
+
+    def generate_json(self, system_prompt: str, user_prompt: str, **kwargs) -> dict:
+        assert kwargs["model"] == "qwen3.6-flash"
         assert "不重复此前 assistant 已经给出的引导" in system_prompt
         assert "先用一个短句回应用户刚刚说清的具体行动或结果" in system_prompt
         assert "不像审核表或访谈提纲" in system_prompt
@@ -101,8 +108,8 @@ def test_profile_agent_exploration_returns_one_evidence_bound_focus():
 
 
 class QuestionExplorationGateway(ExplorationGateway):
-    def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
-        payload = super().generate_json(system_prompt, user_prompt)
+    def generate_json(self, system_prompt: str, user_prompt: str, **kwargs) -> dict:
+        payload = super().generate_json(system_prompt, user_prompt, **kwargs)
         payload["reply"] = "你具体做了什么？"
         payload["focus_dimension"] = "unknown"
         return payload

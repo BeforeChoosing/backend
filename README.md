@@ -53,6 +53,7 @@ Copy-Item .env.example .env
 ```env
 DASHSCOPE_API_KEY=你的百炼密钥
 QWEN_MODEL=qwen3.6-plus
+QWEN_FAST_MODEL=qwen3.6-flash
 TRIAL_BASE_MODEL=qwen3.6-plus
 TRIAL_SFT_MODEL=
 TRIAL_VERIFIER_MODEL=

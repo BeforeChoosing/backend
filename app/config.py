@@ -38,6 +38,7 @@ class Settings:
     dashscope_api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
     dashscope_base_url: str = _CHAT_URL
     qwen_model: str = os.getenv("QWEN_MODEL", "qwen3.6-plus")
+    qwen_fast_model: str = os.getenv("QWEN_FAST_MODEL", "qwen3.6-flash")
     trial_base_model: str = os.getenv("TRIAL_BASE_MODEL", "")
     trial_sft_model: str = os.getenv("TRIAL_SFT_MODEL", "")
     trial_verifier_model: str = os.getenv("TRIAL_VERIFIER_MODEL", "")

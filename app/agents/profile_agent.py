@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Callable
 from typing import Any
 
 from app.schemas.profile import (
@@ -98,6 +99,22 @@ class ProfileAgent:
             self.gateway.generate_json,
             self.EXPLORATION_SYSTEM_PROMPT,
             self._build_exploration_prompt(request),
+            model=self.gateway.settings.qwen_fast_model,
+        )
+        return self._normalize_exploration(raw, trace_id)
+
+    def explore_stream(
+        self,
+        request: ProfileExplorationRequest,
+        trace_id: str,
+        *,
+        on_delta: Callable[[str], None],
+    ) -> ProfileExplorationResponse:
+        raw = self.gateway.stream_json(
+            self.EXPLORATION_SYSTEM_PROMPT,
+            self._build_exploration_prompt(request),
+            on_delta=on_delta,
+            model=self.gateway.settings.qwen_fast_model,
         )
         return self._normalize_exploration(raw, trace_id)
 

@@ -1,10 +1,12 @@
 import asyncio
 import hashlib
+import json
 import logging
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 
 from app.agents.profile_agent import ProfileAgent
 from app.config import get_settings
@@ -21,12 +23,17 @@ from app.schemas.profile import (
 )
 from app.schemas.multimodal import MultimodalEvidenceResponse
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError, llm_error_status
+from app.services.json_stream import JsonStringFieldAccumulator
 from app.services.material_extractor import MaterialExtractionError, extract_material_text
 from app.services.model_response_cache import ModelResponseCache
 from app.services.multimodal_evidence import MultimodalEvidenceExtractor, MultimodalExtractionError
 from app.services.audit_log import record_business_event
 from app.services.conversation_store import ConversationStore
-from app.services.request_context import get_request_context
+from app.services.request_context import (
+    get_request_context,
+    reset_request_context,
+    set_request_context,
+)
 from app.services.profile_exploration_controller import (
     CONTROLLER_VERSION,
     apply_exploration_controller,
@@ -117,7 +124,7 @@ async def create_profile_exploration_message(
         {
             "prompt_version": ProfileAgent.EXPLORATION_PROMPT_VERSION,
             "controller_version": CONTROLLER_VERSION,
-            "model": get_settings().qwen_model,
+            "model": get_settings().qwen_fast_model,
             "experience_text": request.experience_text,
             "messages": [message.model_dump(mode="json") for message in request.messages],
             "focus_history": request.focus_history,
@@ -154,6 +161,160 @@ async def create_profile_exploration_message(
         except (ValueError, TypeError) as exc:
             logger.warning("profile exploration invalid trace_id=%s reason=%s", trace_id, exc)
             raise HTTPException(status_code=502, detail="本轮补充引导没有整理成功，请稍后重试。") from exc
+
+
+def _stream_event(event: str, payload: object) -> str:
+    return (
+        f"event: {event}\n"
+        f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+    )
+
+
+@router.post("/exploration/messages/stream")
+async def stream_profile_exploration_message(
+    request: ProfileExplorationRequest,
+) -> StreamingResponse:
+    """Stream the reply field while retaining the validated final response."""
+
+    settings = get_settings()
+    context = get_request_context()
+    cache_key = ModelResponseCache.fingerprint(
+        {
+            "prompt_version": ProfileAgent.EXPLORATION_PROMPT_VERSION,
+            "controller_version": CONTROLLER_VERSION,
+            "model": settings.qwen_fast_model,
+            "experience_text": request.experience_text,
+            "messages": [message.model_dump(mode="json") for message in request.messages],
+            "focus_history": request.focus_history,
+            "target_role": request.target_role,
+            "existing_card_titles": request.existing_card_titles,
+        }
+    )
+    lock = _exploration_locks.setdefault(cache_key, asyncio.Lock())
+
+    async def events():
+        context_token = set_request_context(context)
+        try:
+            async with lock:
+                cached = _model_cache().get("profile-exploration", cache_key)
+                if cached is not None:
+                    try:
+                        response = ProfileExplorationResponse.model_validate(cached)
+                        _record_exploration_turn(request, response)
+                        yield _stream_event("delta", {"text": response.reply})
+                        yield _stream_event("done", response.model_dump(mode="json"))
+                        return
+                    except ValueError:
+                        logger.warning("discarding invalid cached profile exploration stream")
+
+                trace_id = uuid4().hex
+                event_queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+                loop = asyncio.get_running_loop()
+                reply_accumulator = JsonStringFieldAccumulator("reply")
+
+                def emit_model_delta(raw_delta: str) -> None:
+                    reply_delta = reply_accumulator.feed(raw_delta)
+                    if reply_delta:
+                        loop.call_soon_threadsafe(
+                            event_queue.put_nowait, ("delta", {"text": reply_delta})
+                        )
+
+                def produce() -> None:
+                    worker_token = set_request_context(context)
+                    try:
+                        response = apply_exploration_controller(
+                            _profile_agent().explore_stream(
+                                request,
+                                trace_id,
+                                on_delta=emit_model_delta,
+                            ),
+                            request,
+                        )
+                        _model_cache().set(
+                            "profile-exploration",
+                            cache_key,
+                            response.model_dump(mode="json"),
+                        )
+                        _record_exploration_turn(request, response)
+                        loop.call_soon_threadsafe(
+                            event_queue.put_nowait,
+                            ("done", response.model_dump(mode="json")),
+                        )
+                    except LLMGatewayError as exc:
+                        logger.warning(
+                            "profile exploration stream failed trace_id=%s reason=%s",
+                            trace_id,
+                            exc,
+                        )
+                        loop.call_soon_threadsafe(
+                            event_queue.put_nowait,
+                            (
+                                "error",
+                                {
+                                    "message": str(exc),
+                                    "status": llm_error_status(exc),
+                                    "request_id": context.request_id,
+                                },
+                            ),
+                        )
+                    except (ValueError, TypeError) as exc:
+                        logger.warning(
+                            "profile exploration stream invalid trace_id=%s reason=%s",
+                            trace_id,
+                            exc,
+                        )
+                        loop.call_soon_threadsafe(
+                            event_queue.put_nowait,
+                            (
+                                "error",
+                                {
+                                    "message": "本轮补充引导没有整理成功，请稍后重试。",
+                                    "status": 502,
+                                    "request_id": context.request_id,
+                                },
+                            ),
+                        )
+                    except Exception as exc:  # noqa: BLE001 - stream already started
+                        logger.exception(
+                            "unexpected profile exploration stream failure trace_id=%s",
+                            trace_id,
+                        )
+                        loop.call_soon_threadsafe(
+                            event_queue.put_nowait,
+                            (
+                                "error",
+                                {
+                                    "message": "服务暂时无法完成这次回复。",
+                                    "status": 500,
+                                    "request_id": context.request_id,
+                                },
+                            ),
+                        )
+                    finally:
+                        reset_request_context(worker_token)
+
+                producer = asyncio.create_task(asyncio.to_thread(produce))
+                try:
+                    while True:
+                        event, payload = await event_queue.get()
+                        yield _stream_event(event, payload)
+                        if event in {"done", "error"}:
+                            break
+                    await producer
+                finally:
+                    if not producer.done():
+                        producer.cancel()
+        finally:
+            reset_request_context(context_token)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/materials/extract", response_model=MaterialExtractResponse)
