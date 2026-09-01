@@ -41,6 +41,8 @@ async def audit_formal_mode_requests(request: Request, call_next):
     is_api = path == settings.api_prefix or path.startswith(settings.api_prefix + "/")
     public_auth = request.method == "POST" and path in {
         f"{settings.api_prefix}/auth/login", f"{settings.api_prefix}/auth/register",
+        f"{settings.api_prefix}/auth/password-reset/request",
+        f"{settings.api_prefix}/auth/password-reset/confirm",
     }
     public_read = request.method in {"GET", "HEAD"} and (
         path == f"{settings.api_prefix}/health"

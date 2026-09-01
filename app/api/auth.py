@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import time
 
 from fastapi import APIRouter, Header, HTTPException
 
@@ -11,13 +13,18 @@ from app.schemas.auth import (
     AuthRegisterRequest,
     AuthResponse,
     AuthUser,
+    PasswordResetConfirmRequest,
+    PasswordResetRequest,
+    PasswordResetResponse,
 )
 from app.services.audit_log import AuditLogStore
 from app.services.auth_store import AuthStore
 from app.services.request_context import get_request_context
+from app.services.password_reset_email import send_password_reset_email
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+_reset_cooldowns: dict[str, float] = {}
 
 
 def _store() -> AuthStore:
@@ -87,6 +94,42 @@ def login(request: AuthLoginRequest) -> AuthResponse:
     user = AuthUser.model_validate(payload["user"])
     _record_auth_event(action="auth.login", result="success", user_id=user.id, email=user.email)
     return _response({**payload, "user": user})
+
+
+@router.post("/password-reset/request", response_model=PasswordResetResponse, status_code=202)
+def request_password_reset(request: PasswordResetRequest) -> PasswordResetResponse:
+    # Keep this response identical for known and unknown addresses.
+    try:
+        email = AuthStore.normalize_email(request.email)
+    except ValueError:
+        return PasswordResetResponse(detail="如果邮箱已注册，验证码将发送到你的邮箱。")
+    now = time.monotonic()
+    cooldown = max(30, int(os.getenv("PASSWORD_RESET_COOLDOWN_SECONDS", "60")))
+    if now - _reset_cooldowns.get(email, 0) < cooldown:
+        return PasswordResetResponse(detail="如果邮箱已注册，验证码将发送到你的邮箱。")
+    _reset_cooldowns[email] = now
+    try:
+        payload = _store().create_password_reset_code(email)
+        if payload is not None:
+            recipient, code = payload
+            if not send_password_reset_email(recipient, code):
+                _record_auth_event(action="auth.password_reset.request", result="delivery_failed", email=email)
+            else:
+                _record_auth_event(action="auth.password_reset.request", result="sent", email=email)
+    except ValueError:
+        pass
+    return PasswordResetResponse(detail="如果邮箱已注册，验证码将发送到你的邮箱。")
+
+
+@router.post("/password-reset/confirm", response_model=PasswordResetResponse)
+def confirm_password_reset(request: PasswordResetConfirmRequest) -> PasswordResetResponse:
+    try:
+        _store().reset_password(request.email, request.code, request.new_password)
+    except ValueError as exc:
+        _record_auth_event(action="auth.password_reset.confirm", result="rejected", email=request.email)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _record_auth_event(action="auth.password_reset.confirm", result="success", email=request.email)
+    return PasswordResetResponse(detail="密码已重置，请使用新密码登录。")
 
 
 @router.get("/me", response_model=AuthUser)

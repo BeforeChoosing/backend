@@ -29,3 +29,17 @@ class AuthResponse(BaseModel):
 
 class AuthLogoutResponse(BaseModel):
     logged_out: bool = True
+
+
+class PasswordResetRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    code: str = Field(min_length=6, max_length=6)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class PasswordResetResponse(BaseModel):
+    detail: str

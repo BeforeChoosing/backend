@@ -124,3 +124,21 @@ def test_local_retriever_keeps_manifest_provenance_fields(tmp_path):
     assert chunk.version == "v1.2"
     assert chunk.authority_score == 1.0
     assert chunk.relevance_score == 0.9
+
+
+def test_local_retriever_ignores_hidden_and_appledouble_markdown_files(tmp_path):
+    source_dir = tmp_path / "knowledge"
+    source_dir.mkdir()
+    (source_dir / "valid.md").write_text(
+        "# 有效资料\n\n## 内容\n\n这是一份可检索的 UTF-8 文档。\n",
+        encoding="utf-8",
+    )
+    (source_dir / "._valid.md").write_bytes(b"AppleDouble\xa3\x00\xff")
+    hidden_dir = source_dir / ".metadata"
+    hidden_dir.mkdir()
+    (hidden_dir / "hidden.md").write_text("# 不应被索引\n", encoding="utf-8")
+
+    retriever = KnowledgeRetriever(source_dir, tmp_path / "knowledge.db")
+
+    assert retriever.chunk_count == 1
+    assert all("._" not in chunk.source_locator for chunk in retriever.list_chunks())
