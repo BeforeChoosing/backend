@@ -28,6 +28,7 @@ _DEFAULT_CHAT_URL = (
     "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 )
 _CHAT_URL = os.getenv("DASHSCOPE_BASE_URL", _DEFAULT_CHAT_URL)
+_DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS = 180
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,12 @@ class Settings:
     )
     bailian_vision_model: str = os.getenv("BAILIAN_VISION_MODEL", "qwen-vl-ocr")
     multimodal_max_pages: int = int(os.getenv("MULTIMODAL_MAX_PAGES", "8"))
-    request_timeout_seconds: float = float(os.getenv("LLM_REQUEST_TIMEOUT", "90"))
+    # qwen3.6-plus can legitimately take around 90s for structured profile
+    # proposals; keep enough headroom for the upstream response before
+    # returning a 504 to the client.
+    request_timeout_seconds: float = float(
+        os.getenv("LLM_REQUEST_TIMEOUT", str(_DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS))
+    )
     llm_max_concurrency: int = int(os.getenv("LLM_MAX_CONCURRENCY", "2"))
     llm_max_requests_per_minute: int = int(
         os.getenv("LLM_MAX_REQUESTS_PER_MINUTE", "30")

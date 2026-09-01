@@ -77,9 +77,17 @@ class DashScopeQwenGateway:
                 self.settings, "llm_max_requests_per_minute", 30
             ),
         )
+        # Admission happens before the upstream deadline starts. Queue wait is
+        # tracked separately so a busy FIFO does not consume the DashScope
+        # response timeout.
         started = time.perf_counter()
+        upstream_started: float | None = None
+        queue_wait_ms = 0.0
         try:
-            with queue.admission(request_id=context.request_id, user_id=context.user_id):
+            with queue.admission(request_id=context.request_id, user_id=context.user_id) as ticket:
+                upstream_started = time.perf_counter()
+                if ticket.started_at is not None:
+                    queue_wait_ms = max(0.0, (ticket.started_at - ticket.enqueued_at) * 1000)
                 try:
                     with urllib.request.urlopen(
                         request, timeout=self.settings.request_timeout_seconds
@@ -109,10 +117,10 @@ class DashScopeQwenGateway:
             getattr(self.settings, "profile_db_path", "profile.db"),
             service="qwen",
             model=model or self.settings.qwen_model,
-            duration_ms=(time.perf_counter() - started) * 1000,
+            duration_ms=(time.perf_counter() - (upstream_started or started)) * 1000,
             input_tokens=_usage_int(usage, "prompt_tokens", "input_tokens"),
             output_tokens=_usage_int(usage, "completion_tokens", "output_tokens"),
-            metadata={"endpoint": "chat"},
+            metadata={"endpoint": "chat", "queue_wait_ms": round(queue_wait_ms, 3)},
         )
         content = self._extract_content(response_payload)
         return self._parse_json_content(content)
