@@ -144,3 +144,36 @@ def test_pool_routes_to_an_idle_model_before_queueing() -> None:
     release_first.set()
     thread.join(1)
     assert selected == ["model-a", "model-b"]
+
+
+def test_five_users_can_use_five_idle_models_concurrently() -> None:
+    queue = LLMRequestQueue(
+        max_concurrency=5,
+        max_requests_per_minute=30,
+        model_max_concurrency=1,
+    )
+    candidates = tuple(f"model-{index}" for index in range(5))
+    started = [Event() for _ in range(5)]
+    release = Event()
+    selected: list[str | None] = []
+
+    def run(index: int) -> None:
+        with queue.admission(
+            request_id=f"req-five-{index}",
+            user_id=f"user-five-{index}",
+            candidate_models=candidates,
+            pool="text:balanced",
+        ) as ticket:
+            selected.append(ticket.selected_model)
+            started[index].set()
+            release.wait(2)
+
+    threads = [Thread(target=run, args=(index,)) for index in range(5)]
+    for thread in threads:
+        thread.start()
+    assert all(event.wait(1) for event in started)
+    assert set(selected) == set(candidates)
+
+    release.set()
+    for thread in threads:
+        thread.join(1)

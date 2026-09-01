@@ -1,4 +1,6 @@
 import json
+import io
+import urllib.error
 from contextlib import contextmanager
 from time import sleep
 
@@ -117,3 +119,60 @@ def test_stream_json_forwards_deltas_and_uses_fast_model(monkeypatch, tmp_path) 
     assert observed["payload"]["model"] == "qwen3.6-flash"
     assert observed["payload"]["stream"] is True
     assert observed["timeout"] == 7
+
+
+def test_generate_json_fails_over_to_another_model_before_returning_error(
+    monkeypatch, tmp_path
+) -> None:
+    attempted: list[str] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "{}"}}]}).encode()
+
+    @contextmanager
+    def admission(**kwargs):
+        yield QueueTicket(
+            request_id=kwargs["request_id"],
+            user_id=kwargs["user_id"],
+            state="running",
+            enqueued_at=100.0,
+            started_at=100.0,
+        )
+
+    class FakeQueue:
+        def admission(self, **kwargs):
+            return admission(**kwargs)
+
+    def fake_urlopen(request, timeout):
+        model = json.loads(request.data.decode())["model"]
+        attempted.append(model)
+        if model == "model-unavailable":
+            raise urllib.error.HTTPError(
+                request.full_url,
+                503,
+                "unavailable",
+                hdrs=None,
+                fp=io.BytesIO(b"busy"),
+            )
+        return FakeResponse()
+
+    monkeypatch.setattr(llm_gateway, "get_llm_request_queue", lambda **kwargs: FakeQueue())
+    monkeypatch.setattr(llm_gateway.urllib.request, "urlopen", fake_urlopen)
+    settings = Settings(
+        dashscope_api_key="test-key",
+        qwen_fast_models=("model-unavailable", "model-ready"),
+        llm_model_failure_threshold=99,
+        profile_db_path=str(tmp_path / "profile.db"),
+    )
+
+    assert llm_gateway.DashScopeQwenGateway(settings).generate_json(
+        "system", "user", tier="fast"
+    ) == {}
+    assert attempted == ["model-unavailable", "model-ready"]

@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import time
 import urllib.error
@@ -14,6 +15,10 @@ from app.services.llm_request_queue import (
 )
 from app.services.request_context import get_request_context
 from app.services.model_registry import ModelRegistry, ModelSelection, TextModelTier
+from app.services.model_health import get_model_health_tracker
+
+logger = logging.getLogger(__name__)
+_RETRYABLE_HTTP_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
 class LLMGatewayError(RuntimeError):
@@ -39,6 +44,10 @@ def llm_error_status(error: LLMGatewayError) -> int:
 class DashScopeQwenGateway:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.model_health = get_model_health_tracker(
+            failure_threshold=getattr(settings, "llm_model_failure_threshold", 2),
+            cooldown_seconds=getattr(settings, "llm_model_cooldown_seconds", 60),
+        )
 
     def generate_json(
         self,
@@ -71,38 +80,70 @@ class DashScopeQwenGateway:
         started = time.perf_counter()
         upstream_started: float | None = None
         queue_wait_ms = 0.0
+        failover_count = 0
+        remaining_models = list(self.model_health.available(selection.candidates))
         try:
-            with queue.admission(
-                request_id=context.request_id,
-                user_id=context.user_id,
-                candidate_models=selection.candidates,
-                pool=selection.pool,
-            ) as ticket:
-                upstream_started = time.perf_counter()
-                selected_model = ticket.selected_model or selection.candidates[0]
-                if ticket.started_at is not None:
-                    queue_wait_ms = max(0.0, (ticket.started_at - ticket.enqueued_at) * 1000)
-                request = self._request(
-                    model=selected_model,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                )
-                try:
-                    with urllib.request.urlopen(
-                        request, timeout=self.settings.request_timeout_seconds
-                    ) as response:
-                        raw_body = response.read().decode("utf-8")
-                except urllib.error.HTTPError as exc:
-                    body = exc.read().decode("utf-8", errors="replace")[:500]
-                    raise LLMGatewayError(f"百炼请求失败（HTTP {exc.code}）：{body}") from exc
-                except TimeoutError as exc:
-                    raise LLMGatewayTimeoutError("百炼响应超时，请稍后查看当前记录。") from exc
-                except urllib.error.URLError as exc:
-                    if isinstance(exc.reason, TimeoutError):
+            while remaining_models:
+                with queue.admission(
+                    request_id=context.request_id,
+                    user_id=context.user_id,
+                    candidate_models=tuple(remaining_models),
+                    pool=selection.pool,
+                ) as ticket:
+                    upstream_started = time.perf_counter()
+                    selected_model = ticket.selected_model or remaining_models[0]
+                    if ticket.started_at is not None:
+                        queue_wait_ms += max(
+                            0.0, (ticket.started_at - ticket.enqueued_at) * 1000
+                        )
+                    request = self._request(
+                        model=selected_model,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                    )
+                    try:
+                        with urllib.request.urlopen(
+                            request, timeout=self.settings.request_timeout_seconds
+                        ) as response:
+                            raw_body = response.read().decode("utf-8")
+                    except urllib.error.HTTPError as exc:
+                        body = exc.read().decode("utf-8", errors="replace")[:500]
+                        error = LLMGatewayError(
+                            f"百炼请求失败（HTTP {exc.code}）：{body}"
+                        )
+                        if exc.code in _RETRYABLE_HTTP_STATUSES:
+                            self.model_health.record_failure(selected_model)
+                        if exc.code in _RETRYABLE_HTTP_STATUSES and len(remaining_models) > 1:
+                            failover_count += 1
+                            remaining_models.remove(selected_model)
+                            self._log_failover(selection.pool, selected_model, exc.code)
+                            continue
+                        raise error from exc
+                    except TimeoutError as exc:
+                        self.model_health.record_failure(selected_model)
+                        if len(remaining_models) > 1:
+                            failover_count += 1
+                            remaining_models.remove(selected_model)
+                            self._log_failover(selection.pool, selected_model, "timeout")
+                            continue
                         raise LLMGatewayTimeoutError(
                             "百炼响应超时，请稍后查看当前记录。"
                         ) from exc
-                    raise LLMGatewayError(f"百炼请求无法连接：{exc}") from exc
+                    except urllib.error.URLError as exc:
+                        self.model_health.record_failure(selected_model)
+                        if len(remaining_models) > 1:
+                            failover_count += 1
+                            remaining_models.remove(selected_model)
+                            self._log_failover(selection.pool, selected_model, "connection")
+                            continue
+                        if isinstance(exc.reason, TimeoutError):
+                            raise LLMGatewayTimeoutError(
+                                "百炼响应超时，请稍后查看当前记录。"
+                            ) from exc
+                        raise LLMGatewayError(f"百炼请求无法连接：{exc}") from exc
+                    self.model_health.record_success(selected_model)
+                    break
+                break
         except LLMRequestCancelled as exc:
             raise LLMGatewayCancelledError(str(exc)) from exc
 
@@ -122,11 +163,21 @@ class DashScopeQwenGateway:
             metadata={
                 "endpoint": "chat",
                 "pool": selection.pool,
+                "failover_count": failover_count,
                 "queue_wait_ms": round(queue_wait_ms, 3),
             },
         )
         content = self._extract_content(response_payload)
         return self._parse_json_content(content)
+
+    @staticmethod
+    def _log_failover(pool: str, model: str, reason: object) -> None:
+        logger.warning(
+            "model failover pool=%s model=%s reason=%s",
+            pool,
+            model,
+            reason,
+        )
 
     def stream_json(
         self,
@@ -166,61 +217,94 @@ class DashScopeQwenGateway:
         queue_wait_ms = 0.0
         content_parts: list[str] = []
         usage: Any = None
+        failover_count = 0
+        remaining_models = list(self.model_health.available(selection.candidates))
         try:
-            with queue.admission(
-                request_id=context.request_id,
-                user_id=context.user_id,
-                candidate_models=selection.candidates,
-                pool=selection.pool,
-            ) as ticket:
-                upstream_started = time.perf_counter()
-                selected_model = ticket.selected_model or selection.candidates[0]
-                if ticket.started_at is not None:
-                    queue_wait_ms = max(
-                        0.0, (ticket.started_at - ticket.enqueued_at) * 1000
+            while remaining_models:
+                with queue.admission(
+                    request_id=context.request_id,
+                    user_id=context.user_id,
+                    candidate_models=tuple(remaining_models),
+                    pool=selection.pool,
+                ) as ticket:
+                    upstream_started = time.perf_counter()
+                    selected_model = ticket.selected_model or remaining_models[0]
+                    if ticket.started_at is not None:
+                        queue_wait_ms += max(
+                            0.0, (ticket.started_at - ticket.enqueued_at) * 1000
+                        )
+                    request = self._request(
+                        model=selected_model,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        stream=True,
                     )
-                request = self._request(
-                    model=selected_model,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    stream=True,
-                )
-                try:
-                    with urllib.request.urlopen(
-                        request, timeout=self.settings.request_timeout_seconds
-                    ) as response:
-                        for raw_line in response:
-                            if ticket.cancel_requested:
-                                raise LLMRequestCancelled("请求已由用户取消。")
-                            line = raw_line.decode("utf-8", errors="replace").strip()
-                            if not line.startswith("data:"):
-                                continue
-                            data = line[5:].strip()
-                            if not data or data == "[DONE]":
-                                continue
-                            try:
-                                chunk = json.loads(data)
-                            except json.JSONDecodeError as exc:
-                                raise LLMGatewayError("百炼流式响应包不是合法 JSON。") from exc
-                            if isinstance(chunk, dict) and chunk.get("usage"):
-                                usage = chunk["usage"]
-                            delta = self._extract_stream_delta(chunk)
-                            if delta:
-                                content_parts.append(delta)
-                                on_delta(delta)
-                except urllib.error.HTTPError as exc:
-                    body = exc.read().decode("utf-8", errors="replace")[:500]
-                    raise LLMGatewayError(
-                        f"百炼请求失败（HTTP {exc.code}）：{body}"
-                    ) from exc
-                except TimeoutError as exc:
-                    raise LLMGatewayTimeoutError("百炼响应超时，请稍后查看当前记录。") from exc
-                except urllib.error.URLError as exc:
-                    if isinstance(exc.reason, TimeoutError):
+                    try:
+                        with urllib.request.urlopen(
+                            request, timeout=self.settings.request_timeout_seconds
+                        ) as response:
+                            for raw_line in response:
+                                if ticket.cancel_requested:
+                                    raise LLMRequestCancelled("请求已由用户取消。")
+                                line = raw_line.decode("utf-8", errors="replace").strip()
+                                if not line.startswith("data:"):
+                                    continue
+                                data = line[5:].strip()
+                                if not data or data == "[DONE]":
+                                    continue
+                                try:
+                                    chunk = json.loads(data)
+                                except json.JSONDecodeError as exc:
+                                    raise LLMGatewayError(
+                                        "百炼流式响应包不是合法 JSON。"
+                                    ) from exc
+                                if isinstance(chunk, dict) and chunk.get("usage"):
+                                    usage = chunk["usage"]
+                                delta = self._extract_stream_delta(chunk)
+                                if delta:
+                                    content_parts.append(delta)
+                                    on_delta(delta)
+                    except urllib.error.HTTPError as exc:
+                        body = exc.read().decode("utf-8", errors="replace")[:500]
+                        if exc.code in _RETRYABLE_HTTP_STATUSES:
+                            self.model_health.record_failure(selected_model)
+                        if (
+                            not content_parts
+                            and exc.code in _RETRYABLE_HTTP_STATUSES
+                            and len(remaining_models) > 1
+                        ):
+                            failover_count += 1
+                            remaining_models.remove(selected_model)
+                            self._log_failover(selection.pool, selected_model, exc.code)
+                            continue
+                        raise LLMGatewayError(
+                            f"百炼请求失败（HTTP {exc.code}）：{body}"
+                        ) from exc
+                    except TimeoutError as exc:
+                        self.model_health.record_failure(selected_model)
+                        if not content_parts and len(remaining_models) > 1:
+                            failover_count += 1
+                            remaining_models.remove(selected_model)
+                            self._log_failover(selection.pool, selected_model, "timeout")
+                            continue
                         raise LLMGatewayTimeoutError(
                             "百炼响应超时，请稍后查看当前记录。"
                         ) from exc
-                    raise LLMGatewayError(f"百炼请求无法连接：{exc}") from exc
+                    except urllib.error.URLError as exc:
+                        self.model_health.record_failure(selected_model)
+                        if not content_parts and len(remaining_models) > 1:
+                            failover_count += 1
+                            remaining_models.remove(selected_model)
+                            self._log_failover(selection.pool, selected_model, "connection")
+                            continue
+                        if isinstance(exc.reason, TimeoutError):
+                            raise LLMGatewayTimeoutError(
+                                "百炼响应超时，请稍后查看当前记录。"
+                            ) from exc
+                        raise LLMGatewayError(f"百炼请求无法连接：{exc}") from exc
+                    self.model_health.record_success(selected_model)
+                    break
+                break
         except LLMRequestCancelled as exc:
             raise LLMGatewayCancelledError(str(exc)) from exc
 
@@ -234,6 +318,7 @@ class DashScopeQwenGateway:
             metadata={
                 "endpoint": "chat-stream",
                 "pool": selection.pool,
+                "failover_count": failover_count,
                 "queue_wait_ms": round(queue_wait_ms, 3),
             },
         )

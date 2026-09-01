@@ -15,6 +15,9 @@ from threading import Condition, Lock
 from time import monotonic, time
 from typing import Iterator
 from random import SystemRandom
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class LLMRequestCancelled(RuntimeError):
@@ -135,6 +138,12 @@ class LLMRequestQueue:
                             self._active_by_model.get(selected_model, 0) + 1
                         )
                         self._model_starts.setdefault(selected_model, deque()).append(now)
+                    logger.info(
+                        "model request admitted request_id=%s pool=%s model=%s",
+                        ticket.request_id,
+                        ticket.pool or "shared",
+                        ticket.selected_model or "unspecified",
+                    )
                     break
                 # Wake when an active request finishes or the RPM window moves.
                 wait_seconds = 1.0
@@ -158,6 +167,13 @@ class LLMRequestQueue:
                         self._active_by_model[ticket.selected_model] = active_count - 1
                 if ticket.state != "cancelled":
                     ticket.state = "completed"
+                logger.info(
+                    "model request released request_id=%s pool=%s model=%s state=%s",
+                    ticket.request_id,
+                    ticket.pool or "shared",
+                    ticket.selected_model or "unspecified",
+                    ticket.state,
+                )
                 self._condition.notify_all()
 
     def _remove_waiting(self, ticket: QueueTicket) -> None:

@@ -108,6 +108,12 @@ class Settings:
     llm_model_max_concurrency: int = int(
         os.getenv("LLM_MODEL_MAX_CONCURRENCY", "1")
     )
+    llm_model_failure_threshold: int = int(
+        os.getenv("LLM_MODEL_FAILURE_THRESHOLD", "2")
+    )
+    llm_model_cooldown_seconds: float = float(
+        os.getenv("LLM_MODEL_COOLDOWN_SECONDS", "60")
+    )
     llm_max_requests_per_minute: int = int(
         os.getenv("LLM_MAX_REQUESTS_PER_MINUTE", "30")
     )
