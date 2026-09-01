@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from threading import Condition, Lock
 from time import monotonic, time
 from typing import Iterator
+from random import SystemRandom
 
 
 class LLMRequestCancelled(RuntimeError):
@@ -28,17 +29,30 @@ class QueueTicket:
     enqueued_at: float = 0.0
     started_at: float | None = None
     cancel_requested: bool = False
+    requested_models: tuple[str, ...] = ()
+    selected_model: str | None = None
+    pool: str | None = None
 
 
 class LLMRequestQueue:
-    def __init__(self, *, max_concurrency: int, max_requests_per_minute: int):
+    def __init__(
+        self,
+        *,
+        max_concurrency: int,
+        max_requests_per_minute: int,
+        model_max_concurrency: int = 1,
+    ):
         self.max_concurrency = max(1, max_concurrency)
         self.max_requests_per_minute = max(1, max_requests_per_minute)
+        self.model_max_concurrency = max(1, model_max_concurrency)
         self._condition = Condition()
         self._waiting: deque[QueueTicket] = deque()
         self._active: dict[str, QueueTicket] = {}
         self._active_users: set[str] = set()
         self._starts: deque[float] = deque()
+        self._model_starts: dict[str, deque[float]] = {}
+        self._active_by_model: dict[str, int] = {}
+        self._random = SystemRandom()
 
     def _trim_starts(self, now: float) -> None:
         while self._starts and now - self._starts[0] >= 60:
@@ -50,16 +64,44 @@ class LLMRequestQueue:
                 return ticket
         return None
 
-    def _can_start(self, ticket: QueueTicket, now: float) -> bool:
+    def _available_models(self, ticket: QueueTicket, now: float) -> list[str]:
+        candidates = list(ticket.requested_models)
+        if not candidates:
+            return [""]
+        available: list[str] = []
+        for model in candidates:
+            starts = self._model_starts.setdefault(model, deque())
+            while starts and now - starts[0] >= 60:
+                starts.popleft()
+            if (
+                self._active_by_model.get(model, 0) < self.model_max_concurrency
+                and len(starts) < self.max_requests_per_minute
+            ):
+                available.append(model)
+        return available
+
+    def _can_start(self, ticket: QueueTicket, now: float) -> str | None:
         self._trim_starts(now)
-        return (
-            len(self._active) < self.max_concurrency
-            and len(self._starts) < self.max_requests_per_minute
-            and self._next_eligible() is ticket
-        )
+        if (
+            len(self._active) >= self.max_concurrency
+            or len(self._starts) >= self.max_requests_per_minute
+            or self._next_eligible() is not ticket
+        ):
+            return None
+        available = self._available_models(ticket, now)
+        if not available:
+            return None
+        return self._random.choice(available) if available[0] else ""
 
     @contextmanager
-    def admission(self, *, request_id: str, user_id: str) -> Iterator[QueueTicket]:
+    def admission(
+        self,
+        *,
+        request_id: str,
+        user_id: str,
+        candidate_models: tuple[str, ...] = (),
+        pool: str | None = None,
+    ) -> Iterator[QueueTicket]:
         # Anonymous/background callers get request-scoped isolation rather than
         # sharing a single empty user key.
         effective_user = user_id or f"request:{request_id}"
@@ -67,6 +109,8 @@ class LLMRequestQueue:
             request_id=request_id,
             user_id=effective_user,
             enqueued_at=time(),
+            requested_models=tuple(dict.fromkeys(candidate_models)),
+            pool=pool,
         )
         with self._condition:
             self._waiting.append(ticket)
@@ -77,13 +121,20 @@ class LLMRequestQueue:
                     ticket.state = "cancelled"
                     raise LLMRequestCancelled("请求已由用户取消。")
                 now = monotonic()
-                if self._can_start(ticket, now):
+                selected_model = self._can_start(ticket, now)
+                if selected_model is not None:
                     self._remove_waiting(ticket)
                     ticket.state = "running"
                     ticket.started_at = time()
                     self._active[ticket.request_id] = ticket
                     self._active_users.add(ticket.user_id)
                     self._starts.append(now)
+                    ticket.selected_model = selected_model or None
+                    if selected_model:
+                        self._active_by_model[selected_model] = (
+                            self._active_by_model.get(selected_model, 0) + 1
+                        )
+                        self._model_starts.setdefault(selected_model, deque()).append(now)
                     break
                 # Wake when an active request finishes or the RPM window moves.
                 wait_seconds = 1.0
@@ -99,6 +150,12 @@ class LLMRequestQueue:
             with self._condition:
                 self._active.pop(ticket.request_id, None)
                 self._active_users.discard(ticket.user_id)
+                if ticket.selected_model:
+                    active_count = self._active_by_model.get(ticket.selected_model, 0)
+                    if active_count <= 1:
+                        self._active_by_model.pop(ticket.selected_model, None)
+                    else:
+                        self._active_by_model[ticket.selected_model] = active_count - 1
                 if ticket.state != "cancelled":
                     ticket.state = "completed"
                 self._condition.notify_all()
@@ -131,6 +188,8 @@ class LLMRequestQueue:
             "can_cancel": ticket.state in {"queued", "running"},
             "enqueued_at": ticket.enqueued_at,
             "started_at": ticket.started_at,
+            "model": ticket.selected_model,
+            "pool": ticket.pool,
         }
 
     def cancel_for_user(self, user_id: str) -> bool:
@@ -154,18 +213,28 @@ class LLMRequestQueue:
 
 
 _queue: LLMRequestQueue | None = None
-_queue_config: tuple[int, int] | None = None
+_queue_config: tuple[int, int, int] | None = None
 _queue_lock = Lock()
 
 
-def get_llm_request_queue(*, max_concurrency: int, max_requests_per_minute: int) -> LLMRequestQueue:
+def get_llm_request_queue(
+    *,
+    max_concurrency: int,
+    max_requests_per_minute: int,
+    model_max_concurrency: int = 1,
+) -> LLMRequestQueue:
     global _queue, _queue_config
-    config = (max(1, max_concurrency), max(1, max_requests_per_minute))
+    config = (
+        max(1, max_concurrency),
+        max(1, max_requests_per_minute),
+        max(1, model_max_concurrency),
+    )
     with _queue_lock:
         if _queue is None or _queue_config != config:
             _queue = LLMRequestQueue(
                 max_concurrency=config[0],
                 max_requests_per_minute=config[1],
+                model_max_concurrency=config[2],
             )
             _queue_config = config
     return _queue

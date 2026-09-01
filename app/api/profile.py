@@ -124,12 +124,13 @@ async def create_profile_exploration_message(
         {
             "prompt_version": ProfileAgent.EXPLORATION_PROMPT_VERSION,
             "controller_version": CONTROLLER_VERSION,
-            "model": get_settings().qwen_fast_model,
+            "model_pool": request.model_tier,
             "experience_text": request.experience_text,
             "messages": [message.model_dump(mode="json") for message in request.messages],
             "focus_history": request.focus_history,
             "target_role": request.target_role,
             "existing_card_titles": request.existing_card_titles,
+            "model_tier": request.model_tier,
         }
     )
     lock = _exploration_locks.setdefault(cache_key, asyncio.Lock())
@@ -182,12 +183,13 @@ async def stream_profile_exploration_message(
         {
             "prompt_version": ProfileAgent.EXPLORATION_PROMPT_VERSION,
             "controller_version": CONTROLLER_VERSION,
-            "model": settings.qwen_fast_model,
+            "model_pool": request.model_tier,
             "experience_text": request.experience_text,
             "messages": [message.model_dump(mode="json") for message in request.messages],
             "focus_history": request.focus_history,
             "target_role": request.target_role,
             "existing_card_titles": request.existing_card_titles,
+            "model_tier": request.model_tier,
         }
     )
     lock = _exploration_locks.setdefault(cache_key, asyncio.Lock())

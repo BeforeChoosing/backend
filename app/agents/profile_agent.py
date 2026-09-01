@@ -99,7 +99,7 @@ class ProfileAgent:
             self.gateway.generate_json,
             self.EXPLORATION_SYSTEM_PROMPT,
             self._build_exploration_prompt(request),
-            model=self.gateway.settings.qwen_fast_model,
+            tier=request.model_tier,
         )
         return self._normalize_exploration(raw, trace_id)
 
@@ -114,7 +114,7 @@ class ProfileAgent:
             self.EXPLORATION_SYSTEM_PROMPT,
             self._build_exploration_prompt(request),
             on_delta=on_delta,
-            model=self.gateway.settings.qwen_fast_model,
+            tier=request.model_tier,
         )
         return self._normalize_exploration(raw, trace_id)
 

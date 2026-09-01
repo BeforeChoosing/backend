@@ -18,6 +18,7 @@ from app.services.llm_gateway import (
 from app.services.audit_log import record_model_call
 from app.services.llm_request_queue import LLMRequestCancelled, get_llm_request_queue
 from app.services.request_context import get_request_context
+from app.services.model_registry import ModelRegistry, ModelSelection, VisionModelPool
 
 
 @dataclass(frozen=True)
@@ -40,10 +41,34 @@ class DashScopeVisionGateway:
         images: Sequence[VisionImage],
         *,
         model: str | None = None,
+        pool: VisionModelPool = "ocr",
     ) -> dict[str, Any]:
+        result, _ = self.generate_json_with_model(
+            system_prompt,
+            user_prompt,
+            images,
+            model=model,
+            pool=pool,
+        )
+        return result
+
+    def generate_json_with_model(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        images: Sequence[VisionImage],
+        *,
+        model: str | None = None,
+        pool: VisionModelPool = "ocr",
+    ) -> tuple[dict[str, Any], str]:
         if not self.settings.qwen_configured:
             raise LLMGatewayError("未配置 DASHSCOPE_API_KEY，无法调用百炼视觉模型。")
-        content: list[dict[str, Any]] = [{"type": "text", "text": user_prompt}]
+        selection = (
+            ModelSelection(f"vision:explicit:{model}", (model,))
+            if model
+            else ModelRegistry(self.settings).vision(pool)
+        )
+        content: list[dict[str, Any]] = []
         for image in images:
             encoded = base64.b64encode(image.data).decode("ascii")
             content.append(
@@ -54,34 +79,57 @@ class DashScopeVisionGateway:
                     },
                 }
             )
-        payload = {
-            "model": model or self.settings.bailian_vision_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": content},
-            ],
-            "temperature": 0.1,
-            "response_format": {"type": "json_object"},
-        }
-        request = urllib.request.Request(
-            self.settings.dashscope_base_url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.settings.dashscope_api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
         started = time.perf_counter()
+        upstream_started: float | None = None
+        queue_wait_ms = 0.0
         context = get_request_context()
         queue = get_llm_request_queue(
             max_concurrency=getattr(self.settings, "llm_max_concurrency", 2),
             max_requests_per_minute=getattr(
                 self.settings, "llm_max_requests_per_minute", 30
             ),
+            model_max_concurrency=getattr(
+                self.settings, "llm_model_max_concurrency", 1
+            ),
         )
         try:
-            with queue.admission(request_id=context.request_id, user_id=context.user_id):
+            with queue.admission(
+                request_id=context.request_id,
+                user_id=context.user_id,
+                candidate_models=selection.candidates,
+                pool=selection.pool,
+            ) as ticket:
+                upstream_started = time.perf_counter()
+                selected_model = ticket.selected_model or selection.candidates[0]
+                if ticket.started_at is not None:
+                    queue_wait_ms = max(
+                        0.0, (ticket.started_at - ticket.enqueued_at) * 1000
+                    )
+                prompt = user_prompt
+                messages: list[dict[str, Any]]
+                if ModelRegistry.is_ocr_only(selected_model):
+                    prompt = f"{system_prompt}\n\n{user_prompt}"
+                    messages = [{"role": "user", "content": [{"type": "text", "text": prompt}, *content]}]
+                else:
+                    messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": [{"type": "text", "text": prompt}, *content]},
+                    ]
+                payload = {
+                    "model": selected_model,
+                    "messages": messages,
+                    "temperature": 0.1,
+                    "response_format": {"type": "json_object"},
+                }
+                request = urllib.request.Request(
+                    self.settings.dashscope_base_url,
+                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Bearer {self.settings.dashscope_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
                 try:
                     with urllib.request.urlopen(
                         request, timeout=self.settings.request_timeout_seconds
@@ -104,14 +152,19 @@ class DashScopeVisionGateway:
         record_model_call(
             getattr(self.settings, "profile_db_path", "profile.db"),
             service="qwen-vl",
-            model=model or self.settings.bailian_vision_model,
-            duration_ms=(time.perf_counter() - started) * 1000,
+            model=selected_model,
+            duration_ms=(time.perf_counter() - (upstream_started or started)) * 1000,
             input_tokens=_usage_int(usage, "prompt_tokens", "input_tokens"),
             output_tokens=_usage_int(usage, "completion_tokens", "output_tokens"),
-            metadata={"endpoint": "vision", "images": len(images)},
+            metadata={
+                "endpoint": "vision",
+                "pool": selection.pool,
+                "images": len(images),
+                "queue_wait_ms": round(queue_wait_ms, 3),
+            },
         )
         content_text = DashScopeQwenGateway._extract_content(response_payload)
-        return DashScopeQwenGateway._parse_json_content(content_text)
+        return DashScopeQwenGateway._parse_json_content(content_text), selected_model
 
 
 def _usage_int(usage: Any, *keys: str) -> int | None:

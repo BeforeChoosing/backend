@@ -107,3 +107,40 @@ def test_same_user_requests_are_serialised_while_other_users_can_run() -> None:
     same.join(1)
     other.join(1)
     assert same_user_started.is_set()
+
+
+def test_pool_routes_to_an_idle_model_before_queueing() -> None:
+    queue = LLMRequestQueue(
+        max_concurrency=2,
+        max_requests_per_minute=20,
+        model_max_concurrency=1,
+    )
+    first_started = Event()
+    release_first = Event()
+    selected: list[str | None] = []
+
+    def first() -> None:
+        with queue.admission(
+            request_id="req-model-1",
+            user_id="user-model-1",
+            candidate_models=("model-a",),
+            pool="text:fast",
+        ) as ticket:
+            selected.append(ticket.selected_model)
+            first_started.set()
+            release_first.wait(2)
+
+    thread = Thread(target=first)
+    thread.start()
+    assert first_started.wait(1)
+    with queue.admission(
+        request_id="req-model-2",
+        user_id="user-model-2",
+        candidate_models=("model-a", "model-b"),
+        pool="text:fast",
+    ) as ticket:
+        selected.append(ticket.selected_model)
+
+    release_first.set()
+    thread.join(1)
+    assert selected == ["model-a", "model-b"]

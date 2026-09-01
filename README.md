@@ -54,6 +54,9 @@ Copy-Item .env.example .env
 DASHSCOPE_API_KEY=你的百炼密钥
 QWEN_MODEL=qwen3.6-plus
 QWEN_FAST_MODEL=qwen3.6-flash
+QWEN_FAST_MODELS=qwen3.6-flash,qwen3.7-flash,qwen3.8-flash
+QWEN_BALANCED_MODELS=qwen3.6-plus,qwen3.7-plus,qwen3.5-plus
+QWEN_REASONING_MODELS=qwen3.8-max,qwen3.7-max,qwen3-max
 TRIAL_BASE_MODEL=qwen3.6-plus
 TRIAL_SFT_MODEL=
 TRIAL_VERIFIER_MODEL=
@@ -70,6 +73,10 @@ BAILIAN_EMBEDDING_BATCH_SIZE=20
 BAILIAN_RERANK_URL=
 BAILIAN_RERANK_MODEL=qwen3-rerank
 BAILIAN_VISION_MODEL=qwen-vl-ocr
+OCR_FAST_MODELS=qwen3-vl-flash-2026-01-22
+OCR_SPECIALIST_MODELS=qwen3.5-ocr,qwen-vl-ocr-2025-11-20
+VISION_GENERAL_MODELS=qwen3-vl-plus,qwen3-vl-32b-instruct,qwen3-vl-235b-a22b-instruct
+VISION_REASONING_MODELS=qwen3-vl-235b-a22b-thinking
 MULTIMODAL_MAX_PAGES=8
 RAG_RETRIEVER_MODE=vector
 RAG_CANDIDATE_LIMIT=20
@@ -78,7 +85,8 @@ RAG_RRF_K=20
 RAG_RRF_ANCHOR_LEXICAL_WEIGHT=0
 RAG_MMR_RELEVANCE_WEIGHT=0.65
 LLM_REQUEST_TIMEOUT=90
-LLM_MAX_CONCURRENCY=2
+LLM_MAX_CONCURRENCY=5
+LLM_MODEL_MAX_CONCURRENCY=1
 LLM_MAX_REQUESTS_PER_MINUTE=30
 PROFILE_DB_PATH=profile.db
 AUTH_SESSION_TTL_HOURS=720
@@ -259,7 +267,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 
 `POST /api/v1/profile/materials/extract` 接收最大 20MB 的 PDF、Word (`.docx`)、Markdown 或 TXT 文档，只在内存中提取可复制文本，并把最多 12000 字返回前端供用户核对。接口不会把原文件或提取结果直接写入长期画像。
 
-`POST /api/v1/profile/materials/multimodal-extract` 使用 `.env` 中的 `BAILIAN_VISION_MODEL`（默认 `qwen-vl-ocr`）处理图片材料和扫描 PDF。扫描 PDF 最多渲染 `MULTIMODAL_MAX_PAGES` 页；图片或页面以一次视觉请求发送，结果保留 `page`、归一化 `bbox`、连续文字 `quote`、来源哈希和 `source_ref`。每条结果状态固定为 `candidate`，前端核对前不会进入能力卡或职业推荐。
+`POST /api/v1/profile/materials/multimodal-extract` 默认进入 `OCR_SPECIALIST_MODELS` 模型池，从当前空闲的 `qwen3.5-ocr` 与固定版本 `qwen-vl-ocr-2025-11-20` 中随机路由；快速预览、通用视觉和深度视觉分别由 `OCR_FAST_MODELS`、`VISION_GENERAL_MODELS`、`VISION_REASONING_MODELS` 配置。OCR 专用模型不发送 System Message，而是将安全约束合并到 User Message。扫描 PDF 最多渲染 `MULTIMODAL_MAX_PAGES` 页；结果统一保留 `page`、归一化 `bbox`、连续文字 `quote`、来源哈希、实际命中模型和 `source_ref`。每条结果状态固定为 `candidate`，前端核对前不会进入能力卡或职业推荐。
 
 前端上传普通文字 PDF 时只调用文字提取；检测到 PDF 没有文字层，或上传 PNG/JPG/WebP 时才调用一次 Qwen-VL。这样不会为同一份可复制文本重复支付视觉调用。旧版 `.doc` 和外部链接抓取仍不在支持范围。
 

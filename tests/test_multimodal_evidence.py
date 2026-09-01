@@ -108,5 +108,11 @@ def test_vision_gateway_sends_data_url_to_bailian(monkeypatch) -> None:
     )
 
     assert payload == {"evidence": []}
-    assert captured["payload"]["model"] == "qwen-vl-ocr"
-    assert captured["payload"]["messages"][1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert captured["payload"]["model"] in {
+        "qwen3.5-ocr",
+        "qwen-vl-ocr-2025-11-20",
+    }
+    assert len(captured["payload"]["messages"]) == 1
+    assert captured["payload"]["messages"][0]["role"] == "user"
+    assert "system" in captured["payload"]["messages"][0]["content"][0]["text"]
+    assert captured["payload"]["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")

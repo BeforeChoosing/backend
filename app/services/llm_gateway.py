@@ -13,6 +13,7 @@ from app.services.llm_request_queue import (
     get_llm_request_queue,
 )
 from app.services.request_context import get_request_context
+from app.services.model_registry import ModelRegistry, ModelSelection, TextModelTier
 
 
 class LLMGatewayError(RuntimeError):
@@ -45,6 +46,7 @@ class DashScopeQwenGateway:
         user_prompt: str,
         *,
         model: str | None = None,
+        tier: TextModelTier | None = None,
     ) -> dict[str, Any]:
         if not self.settings.qwen_configured:
             raise LLMGatewayError(
@@ -52,30 +54,15 @@ class DashScopeQwenGateway:
                 "不会使用伪造结果代替模型响应。"
             )
 
-        payload = {
-            "model": model or self.settings.qwen_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0.2,
-            "response_format": {"type": "json_object"},
-        }
-        request = urllib.request.Request(
-            self.settings.dashscope_base_url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.settings.dashscope_api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-
         context = get_request_context()
+        selection = self._selection(model=model, tier=tier)
         queue = get_llm_request_queue(
             max_concurrency=getattr(self.settings, "llm_max_concurrency", 2),
             max_requests_per_minute=getattr(
                 self.settings, "llm_max_requests_per_minute", 30
+            ),
+            model_max_concurrency=getattr(
+                self.settings, "llm_model_max_concurrency", 1
             ),
         )
         # Admission happens before the upstream deadline starts. Queue wait is
@@ -85,10 +72,21 @@ class DashScopeQwenGateway:
         upstream_started: float | None = None
         queue_wait_ms = 0.0
         try:
-            with queue.admission(request_id=context.request_id, user_id=context.user_id) as ticket:
+            with queue.admission(
+                request_id=context.request_id,
+                user_id=context.user_id,
+                candidate_models=selection.candidates,
+                pool=selection.pool,
+            ) as ticket:
                 upstream_started = time.perf_counter()
+                selected_model = ticket.selected_model or selection.candidates[0]
                 if ticket.started_at is not None:
                     queue_wait_ms = max(0.0, (ticket.started_at - ticket.enqueued_at) * 1000)
+                request = self._request(
+                    model=selected_model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                )
                 try:
                     with urllib.request.urlopen(
                         request, timeout=self.settings.request_timeout_seconds
@@ -117,11 +115,15 @@ class DashScopeQwenGateway:
         record_model_call(
             getattr(self.settings, "profile_db_path", "profile.db"),
             service="qwen",
-            model=model or self.settings.qwen_model,
+            model=selected_model,
             duration_ms=(time.perf_counter() - (upstream_started or started)) * 1000,
             input_tokens=_usage_int(usage, "prompt_tokens", "input_tokens"),
             output_tokens=_usage_int(usage, "completion_tokens", "output_tokens"),
-            metadata={"endpoint": "chat", "queue_wait_ms": round(queue_wait_ms, 3)},
+            metadata={
+                "endpoint": "chat",
+                "pool": selection.pool,
+                "queue_wait_ms": round(queue_wait_ms, 3),
+            },
         )
         content = self._extract_content(response_payload)
         return self._parse_json_content(content)
@@ -133,6 +135,7 @@ class DashScopeQwenGateway:
         *,
         on_delta: Callable[[str], None],
         model: str | None = None,
+        tier: TextModelTier | None = None,
     ) -> dict[str, Any]:
         """Stream OpenAI-compatible content deltas and return validated JSON.
 
@@ -147,34 +150,15 @@ class DashScopeQwenGateway:
                 "不会使用伪造结果代替模型响应。"
             )
 
-        selected_model = model or self.settings.qwen_model
-        payload = {
-            "model": selected_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0.2,
-            "response_format": {"type": "json_object"},
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-        request = urllib.request.Request(
-            self.settings.dashscope_base_url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.settings.dashscope_api_key}",
-                "Content-Type": "application/json",
-                "Accept": "text/event-stream",
-            },
-            method="POST",
-        )
-
         context = get_request_context()
+        selection = self._selection(model=model, tier=tier)
         queue = get_llm_request_queue(
             max_concurrency=getattr(self.settings, "llm_max_concurrency", 2),
             max_requests_per_minute=getattr(
                 self.settings, "llm_max_requests_per_minute", 30
+            ),
+            model_max_concurrency=getattr(
+                self.settings, "llm_model_max_concurrency", 1
             ),
         )
         started = time.perf_counter()
@@ -184,13 +168,23 @@ class DashScopeQwenGateway:
         usage: Any = None
         try:
             with queue.admission(
-                request_id=context.request_id, user_id=context.user_id
+                request_id=context.request_id,
+                user_id=context.user_id,
+                candidate_models=selection.candidates,
+                pool=selection.pool,
             ) as ticket:
                 upstream_started = time.perf_counter()
+                selected_model = ticket.selected_model or selection.candidates[0]
                 if ticket.started_at is not None:
                     queue_wait_ms = max(
                         0.0, (ticket.started_at - ticket.enqueued_at) * 1000
                     )
+                request = self._request(
+                    model=selected_model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    stream=True,
+                )
                 try:
                     with urllib.request.urlopen(
                         request, timeout=self.settings.request_timeout_seconds
@@ -239,6 +233,7 @@ class DashScopeQwenGateway:
             output_tokens=_usage_int(usage, "completion_tokens", "output_tokens"),
             metadata={
                 "endpoint": "chat-stream",
+                "pool": selection.pool,
                 "queue_wait_ms": round(queue_wait_ms, 3),
             },
         )
@@ -246,6 +241,49 @@ class DashScopeQwenGateway:
         if not content.strip():
             raise LLMGatewayError("百炼流式响应中没有可读取的模型文本。")
         return self._parse_json_content(content)
+
+    def _selection(
+        self,
+        *,
+        model: str | None,
+        tier: TextModelTier | None,
+    ) -> ModelSelection:
+        if model:
+            return ModelSelection(f"text:explicit:{model}", (model,))
+        return ModelRegistry(self.settings).text(tier)
+
+    def _request(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        stream: bool = False,
+    ) -> urllib.request.Request:
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+        }
+        if stream:
+            payload["stream"] = True
+            payload["stream_options"] = {"include_usage": True}
+        headers = {
+            "Authorization": f"Bearer {self.settings.dashscope_api_key}",
+            "Content-Type": "application/json",
+        }
+        if stream:
+            headers["Accept"] = "text/event-stream"
+        return urllib.request.Request(
+            self.settings.dashscope_base_url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
 
     @staticmethod
     def _extract_stream_delta(payload: Any) -> str:

@@ -26,6 +26,7 @@ ExplorationFocus = Literal[
     "evidence",
 ]
 ExplorationCoverageStatus = Literal["missing", "weak", "sufficient", "confirmed"]
+ModelTier = Literal["fast", "balanced", "reasoning"]
 
 
 class ProfileConversationMessage(BaseModel):
@@ -45,6 +46,7 @@ class ProfileExplorationRequest(BaseModel):
     target_role: str | None = Field(default=None, max_length=120)
     existing_card_titles: list[str] = Field(default_factory=list, max_length=20)
     request_id: str | None = Field(default=None, min_length=8, max_length=100)
+    model_tier: ModelTier = "fast"
 
 
 class ProfileExplorationResponse(BaseModel):

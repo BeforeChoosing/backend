@@ -73,6 +73,9 @@ class DashScopeEmbeddingGateway:
             max_requests_per_minute=getattr(
                 self.settings, "llm_max_requests_per_minute", 30
             ),
+            model_max_concurrency=getattr(
+                self.settings, "llm_model_max_concurrency", 1
+            ),
         )
         record_model_call(
             getattr(self.settings, "profile_db_path", "profile.db"), service="embedding",
@@ -222,6 +225,9 @@ class DashScopeRerankGateway:
             max_requests_per_minute=getattr(
                 self.settings, "llm_max_requests_per_minute", 30
             ),
+            model_max_concurrency=getattr(
+                self.settings, "llm_model_max_concurrency", 1
+            ),
         )
         record_model_call(
             getattr(self.settings, "profile_db_path", "profile.db"), service="rerank",
@@ -271,6 +277,7 @@ def _post_json(
     error_type: type[BailianRetrievalError],
     max_concurrency: int,
     max_requests_per_minute: int,
+    model_max_concurrency: int = 1,
 ) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
@@ -285,6 +292,7 @@ def _post_json(
     queue = get_llm_request_queue(
         max_concurrency=max_concurrency,
         max_requests_per_minute=max_requests_per_minute,
+        model_max_concurrency=model_max_concurrency,
     )
     try:
         with queue.admission(request_id=context.request_id, user_id=context.user_id):

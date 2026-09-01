@@ -13,6 +13,7 @@ def _queue():
     return get_llm_request_queue(
         max_concurrency=settings.llm_max_concurrency,
         max_requests_per_minute=settings.llm_max_requests_per_minute,
+        model_max_concurrency=settings.llm_model_max_concurrency,
     )
 
 
