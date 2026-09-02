@@ -59,6 +59,25 @@ class ConversationStore:
                 ON profile_conversation_turns(user_id, created_at)
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS profile_conversation_snapshots (
+                    id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, id)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_profile_snapshot_user_time
+                ON profile_conversation_snapshots(user_id, updated_at)
+                """
+            )
 
     def record_turn(
         self,
@@ -117,3 +136,105 @@ class ConversationStore:
                     item[key.removesuffix("_json")] = [] if key == "messages_json" else {}
             result.append(item)
         return result
+
+    def upsert_snapshot(
+        self,
+        *,
+        user_id: str,
+        conversation_id: str,
+        snapshot: Mapping[str, Any],
+        max_per_user: int = 50,
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat()
+        payload = dict(snapshot)
+        title = str(payload.get("title") or "未命名对话")
+        with self._connection() as connection:
+            existing = connection.execute(
+                """
+                SELECT created_at
+                FROM profile_conversation_snapshots
+                WHERE user_id = ? AND id = ?
+                """,
+                (user_id, conversation_id),
+            ).fetchone()
+            created_at = str(existing["created_at"]) if existing else now
+            connection.execute(
+                """
+                INSERT INTO profile_conversation_snapshots (
+                    id, user_id, title, payload_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, id) DO UPDATE SET
+                    title = excluded.title,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    conversation_id,
+                    user_id,
+                    title,
+                    json.dumps(payload, ensure_ascii=False, default=str),
+                    created_at,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                DELETE FROM profile_conversation_snapshots
+                WHERE user_id = ? AND id NOT IN (
+                    SELECT id
+                    FROM profile_conversation_snapshots
+                    WHERE user_id = ?
+                    ORDER BY updated_at DESC, id DESC
+                    LIMIT ?
+                )
+                """,
+                (user_id, user_id, max(1, min(int(max_per_user), 100))),
+            )
+        return {
+            **payload,
+            "id": conversation_id,
+            "created_at": created_at,
+            "updated_at": now,
+        }
+
+    def list_snapshots(self, *, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        bounded_limit = max(1, min(int(limit), 50))
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, payload_json, created_at, updated_at
+                FROM profile_conversation_snapshots
+                WHERE user_id = ?
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ?
+                """,
+                (user_id, bounded_limit),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            result.append(
+                {
+                    **payload,
+                    "id": row["id"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            )
+        return result
+
+    def delete_snapshot(self, *, user_id: str, conversation_id: str) -> bool:
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM profile_conversation_snapshots
+                WHERE user_id = ? AND id = ?
+                """,
+                (user_id, conversation_id),
+            )
+        return cursor.rowcount > 0

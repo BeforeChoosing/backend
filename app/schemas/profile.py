@@ -38,11 +38,11 @@ class ProfileExplorationRequest(BaseModel):
     # Exploration is a conversation: a user may begin with a brief greeting or
     # question before sharing a full experience.
     experience_text: str = Field(min_length=1, max_length=12000)
-    messages: list[ProfileConversationMessage] = Field(default_factory=list, max_length=12)
+    messages: list[ProfileConversationMessage] = Field(default_factory=list, max_length=50)
     # The client may echo the dimensions already prompted by the server.  This
     # is optional so older clients remain compatible; coverage is still
     # recomputed from the full user transcript on every request.
-    focus_history: list[ExplorationFocus] = Field(default_factory=list, max_length=12)
+    focus_history: list[ExplorationFocus] = Field(default_factory=list, max_length=50)
     target_role: str | None = Field(default=None, max_length=120)
     existing_card_titles: list[str] = Field(default_factory=list, max_length=20)
     request_id: str | None = Field(default=None, min_length=8, max_length=100)
@@ -58,7 +58,42 @@ class ProfileExplorationResponse(BaseModel):
     potential_hypotheses: list[str] = Field(default_factory=list, max_length=3)
     ready_for_proposal: bool = False
     coverage: dict[ExplorationFocus, ExplorationCoverageStatus] = Field(default_factory=dict)
+    model: str | None = Field(default=None, max_length=120)
+    model_pool: str | None = Field(default=None, max_length=120)
+    cache_hit: bool = False
     notice: str = "潜能线索仅用于继续补充经历，确认前不会写入个人画像。"
+
+
+class ProfileConversationSnapshotMessage(BaseModel):
+    id: str = Field(min_length=1, max_length=120)
+    role: Literal["user", "ai"]
+    content: str = Field(min_length=1, max_length=1000)
+    timestamp: str = Field(default="", max_length=40)
+    detected_signals: list[str] = Field(default_factory=list, max_length=5)
+    model: str | None = Field(default=None, max_length=120)
+    cache_hit: bool | None = None
+
+
+class ProfileConversationMaterial(BaseModel):
+    name: str = Field(min_length=1, max_length=240)
+    size: str = Field(default="", max_length=40)
+    type: Literal["resume", "portfolio", "link"]
+
+
+class ProfileConversationSnapshotUpsert(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    messages: list[ProfileConversationSnapshotMessage] = Field(min_length=1, max_length=60)
+    evidence: str = Field(default="", max_length=12000)
+    materials: list[ProfileConversationMaterial] = Field(default_factory=list, max_length=20)
+    target_career_state: Literal["unselected", "has_target", "no_target"] = "unselected"
+    target_role: str = Field(default="", max_length=120)
+    model_tier: ModelTier = "balanced"
+
+
+class ProfileConversationSnapshot(ProfileConversationSnapshotUpsert):
+    id: str = Field(min_length=1, max_length=120)
+    created_at: datetime
+    updated_at: datetime
 
 
 class ProfileProposalRequest(BaseModel):

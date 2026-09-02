@@ -168,7 +168,10 @@ class DashScopeQwenGateway:
             },
         )
         content = self._extract_content(response_payload)
-        return self._parse_json_content(content)
+        parsed = self._parse_json_content(content)
+        parsed["_selected_model"] = selected_model
+        parsed["_model_pool"] = selection.pool
+        return parsed
 
     @staticmethod
     def _log_failover(pool: str, model: str, reason: object) -> None:
@@ -325,7 +328,10 @@ class DashScopeQwenGateway:
         content = "".join(content_parts)
         if not content.strip():
             raise LLMGatewayError("百炼流式响应中没有可读取的模型文本。")
-        return self._parse_json_content(content)
+        parsed = self._parse_json_content(content)
+        parsed["_selected_model"] = selected_model
+        parsed["_model_pool"] = selection.pool
+        return parsed
 
     def _selection(
         self,

@@ -1,7 +1,9 @@
 
+import pytest
+
 from app.api import profile as profile_api
 from app.schemas.profile import CardProposal
-from app.schemas.profile import ProfileExplorationResponse
+from app.schemas.profile import ProfileExplorationRequest, ProfileExplorationResponse
 from app.services.profile_store import ProfileStore
 from app.schemas.trial import ObservedEvidence, TrialEvaluation, TrialDimensionEvaluation
 
@@ -105,6 +107,8 @@ class _FakeProfileExplorationAgent:
             evidence_gap="仍缺少范围取舍的判断依据。",
             potential_hypotheses=["可能具备产品范围判断潜能，仍需验证。"],
             ready_for_proposal=False,
+            model="qwen-test",
+            model_pool="fast",
         )
 
     def explore_stream(self, request, trace_id, *, on_delta):
@@ -119,6 +123,8 @@ class _FakeProfileExplorationAgent:
             evidence_gap="仍缺少范围取舍的判断依据。",
             potential_hypotheses=["可能具备产品范围判断潜能，仍需验证。"],
             ready_for_proposal=False,
+            model="qwen-test",
+            model_pool="fast",
         )
 
 
@@ -139,7 +145,10 @@ def test_profile_exploration_reuses_identical_model_result(tmp_path, monkeypatch
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert first.json() == second.json()
+    assert first.json()["cache_hit"] is False
+    assert second.json()["cache_hit"] is True
+    assert first.json()["model"] == second.json()["model"] == "qwen-test"
+    assert first.json()["reply"] == second.json()["reply"]
     assert agent.calls == 1
 
 
@@ -210,4 +219,25 @@ def test_profile_exploration_stream_emits_reply_before_final_payload(
     assert response.text.index("event: delta") < response.text.index("event: done")
     assert '"text":"补充你如何"' in response.text
     assert '"reply":"补充你如何根据访谈确定范围。"' in response.text
+    assert '"model":"qwen-test"' in response.text
+    assert '"cache_hit":false' in response.text
     assert agent.calls == 1
+
+
+def test_profile_exploration_accepts_fifty_context_messages():
+    messages = [
+        {"role": "user" if index % 2 == 0 else "assistant", "content": f"第 {index + 1} 条"}
+        for index in range(50)
+    ]
+    request = ProfileExplorationRequest.model_validate(
+        {"experience_text": "测试上下文", "messages": messages}
+    )
+    assert len(request.messages) == 50
+
+
+def test_profile_exploration_rejects_more_than_fifty_context_messages():
+    messages = [{"role": "user", "content": f"第 {index + 1} 条"} for index in range(51)]
+    with pytest.raises(ValueError):
+        ProfileExplorationRequest.model_validate(
+            {"experience_text": "测试上下文", "messages": messages}
+        )

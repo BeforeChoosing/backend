@@ -178,6 +178,8 @@ class ProfileAgent:
             evidence_gap=evidence_gap[:300],
             potential_hypotheses=hypotheses,
             ready_for_proposal=bool(raw.get("ready_for_proposal", False)),
+            model=(str(raw.get("_selected_model") or "").strip()[:120] or None),
+            model_pool=(str(raw.get("_model_pool") or "").strip()[:120] or None),
         )
 
     async def propose(

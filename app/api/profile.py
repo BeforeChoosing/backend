@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,6 +18,8 @@ from app.schemas.profile import (
     ProfileExplorationResponse,
     ProfileCardPatchRequest,
     ProfileCardsResponse,
+    ProfileConversationSnapshot,
+    ProfileConversationSnapshotUpsert,
     ProfileOverviewResponse,
     ProfileProposalRequest,
     ProfileProposalResponse,
@@ -46,6 +49,7 @@ router = APIRouter(prefix="/profile", tags=["profile"])
 MAX_MATERIAL_BYTES = 20 * 1024 * 1024
 _exploration_locks: dict[str, asyncio.Lock] = {}
 _proposal_locks: dict[str, asyncio.Lock] = {}
+_CONVERSATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,120}$")
 
 
 def _profile_store() -> ProfileStore:
@@ -54,6 +58,13 @@ def _profile_store() -> ProfileStore:
 
 def _profile_agent() -> ProfileAgent:
     return ProfileAgent(DashScopeQwenGateway(get_settings()))
+
+
+def _formal_user_id() -> str:
+    context = get_request_context()
+    if context.app_mode != "use" or not context.user_id:
+        raise HTTPException(status_code=401, detail="请先登录后再同步对话记录。")
+    return context.user_id
 
 
 def _model_cache() -> ModelResponseCache:
@@ -139,6 +150,7 @@ async def create_profile_exploration_message(
         if cached is not None:
             try:
                 response = ProfileExplorationResponse.model_validate(cached)
+                response = response.model_copy(update={"cache_hit": True})
                 _record_exploration_turn(request, response)
                 return response
             except ValueError:
@@ -149,6 +161,7 @@ async def create_profile_exploration_message(
                 await _profile_agent().explore(request, trace_id),
                 request,
             )
+            response = response.model_copy(update={"cache_hit": False})
             _model_cache().set(
                 "profile-exploration",
                 cache_key,
@@ -202,6 +215,7 @@ async def stream_profile_exploration_message(
                 if cached is not None:
                     try:
                         response = ProfileExplorationResponse.model_validate(cached)
+                        response = response.model_copy(update={"cache_hit": True})
                         _record_exploration_turn(request, response)
                         yield _stream_event("delta", {"text": response.reply})
                         yield _stream_event("done", response.model_dump(mode="json"))
@@ -232,6 +246,7 @@ async def stream_profile_exploration_message(
                             ),
                             request,
                         )
+                        response = response.model_copy(update={"cache_hit": False})
                         _model_cache().set(
                             "profile-exploration",
                             cache_key,
@@ -418,6 +433,59 @@ def get_profile_conversations(
         user_id=context.user_id,
         limit=limit,
     )
+
+
+@router.get(
+    "/conversation-snapshots",
+    response_model=list[ProfileConversationSnapshot],
+)
+def list_profile_conversation_snapshots(
+    limit: int = Query(default=50, ge=1, le=50),
+) -> list[ProfileConversationSnapshot]:
+    """Return formal-mode conversations for the authenticated account."""
+
+    user_id = _formal_user_id()
+    snapshots = ConversationStore(get_settings().profile_db_path).list_snapshots(
+        user_id=user_id,
+        limit=limit,
+    )
+    return [ProfileConversationSnapshot.model_validate(item) for item in snapshots]
+
+
+@router.put(
+    "/conversation-snapshots/{conversation_id}",
+    response_model=ProfileConversationSnapshot,
+)
+def upsert_profile_conversation_snapshot(
+    conversation_id: str,
+    request: ProfileConversationSnapshotUpsert,
+) -> ProfileConversationSnapshot:
+    """Create or replace one conversation snapshot for the current account."""
+
+    if not _CONVERSATION_ID_PATTERN.fullmatch(conversation_id):
+        raise HTTPException(status_code=422, detail="对话编号格式无效。")
+    user_id = _formal_user_id()
+    snapshot = ConversationStore(get_settings().profile_db_path).upsert_snapshot(
+        user_id=user_id,
+        conversation_id=conversation_id,
+        snapshot=request.model_dump(mode="json"),
+        max_per_user=50,
+    )
+    return ProfileConversationSnapshot.model_validate(snapshot)
+
+
+@router.delete("/conversation-snapshots/{conversation_id}")
+def delete_profile_conversation_snapshot(conversation_id: str) -> dict[str, bool]:
+    if not _CONVERSATION_ID_PATTERN.fullmatch(conversation_id):
+        raise HTTPException(status_code=422, detail="对话编号格式无效。")
+    user_id = _formal_user_id()
+    deleted = ConversationStore(get_settings().profile_db_path).delete_snapshot(
+        user_id=user_id,
+        conversation_id=conversation_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="该历史对话不存在。")
+    return {"deleted": True}
 
 
 @router.post("/cards/confirm", response_model=ProfileCardsResponse)
