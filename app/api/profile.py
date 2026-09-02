@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.agents.profile_agent import ProfileAgent
 from app.config import get_settings
@@ -28,6 +28,7 @@ from app.schemas.multimodal import MultimodalEvidenceResponse
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError, llm_error_status
 from app.services.json_stream import JsonStringFieldAccumulator
 from app.services.material_extractor import MaterialExtractionError, extract_material_text
+from app.services.material_store import MaterialStorageError, MaterialStore
 from app.services.model_response_cache import ModelResponseCache
 from app.services.multimodal_evidence import MultimodalEvidenceExtractor, MultimodalExtractionError
 from app.services.audit_log import record_business_event
@@ -58,6 +59,10 @@ def _profile_store() -> ProfileStore:
 
 def _profile_agent() -> ProfileAgent:
     return ProfileAgent(DashScopeQwenGateway(get_settings()))
+
+
+def _material_store() -> MaterialStore:
+    return MaterialStore(user_data_path(get_settings().profile_db_path))
 
 
 def _formal_user_id() -> str:
@@ -348,11 +353,20 @@ async def extract_profile_material(file: UploadFile = File(...)) -> MaterialExtr
         text, truncated = extract_material_text(file_name, data)
     except MaterialExtractionError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        stored = _material_store().save(
+            original_name=file_name,
+            data=data,
+            mime_type=content_type or "application/octet-stream",
+        )
+    except MaterialStorageError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     response = MaterialExtractResponse(
         file_name=file_name,
         text=text,
         char_count=len(text),
         truncated=truncated,
+        stored_material_id=str(stored["id"]),
     )
     _record_business_event(
         "profile_material",
@@ -395,6 +409,15 @@ async def extract_profile_multimodal_evidence(
     except LLMGatewayError as exc:
         logger.warning("multimodal evidence extraction failed: %s", exc)
         raise HTTPException(status_code=llm_error_status(exc), detail=str(exc)) from exc
+    try:
+        stored = _material_store().save(
+            original_name=file_name,
+            data=data,
+            mime_type=content_type or "application/octet-stream",
+        )
+    except MaterialStorageError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    response = response.model_copy(update={"stored_material_id": str(stored["id"])})
     _record_business_event(
         "profile_material",
         "profile.material.multimodal_extract",
@@ -408,6 +431,22 @@ async def extract_profile_multimodal_evidence(
         },
     )
     return response
+
+
+@router.get("/materials/{material_id}")
+def download_profile_material(material_id: str) -> FileResponse:
+    if not re.fullmatch(r"material-[a-f0-9]{32}", material_id):
+        raise HTTPException(status_code=404, detail="该材料不存在。")
+    stored = _material_store().get(material_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="该材料不存在。")
+    metadata, path = stored
+    return FileResponse(
+        path,
+        media_type=str(metadata["mime_type"]),
+        filename=str(metadata["original_name"]),
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.get("/cards", response_model=ProfileCardsResponse)

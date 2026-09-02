@@ -78,6 +78,7 @@ class ProfileConversationMaterial(BaseModel):
     name: str = Field(min_length=1, max_length=240)
     size: str = Field(default="", max_length=40)
     type: Literal["resume", "portfolio", "link"]
+    server_file_id: str | None = Field(default=None, max_length=120)
 
 
 class ProfileConversationSnapshotUpsert(BaseModel):
@@ -107,6 +108,7 @@ class MaterialExtractResponse(BaseModel):
     text: str = Field(min_length=1, max_length=12000)
     char_count: int = Field(ge=1)
     truncated: bool = False
+    stored_material_id: str = Field(min_length=1, max_length=120)
     notice: str = "仅提取文档中的可复制文本；内容需由用户核对，且尚未写入长期画像。"
 
 

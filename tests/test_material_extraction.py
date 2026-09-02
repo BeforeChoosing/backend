@@ -15,6 +15,10 @@ def test_extract_text_material(authenticated_client) -> None:
     assert response.status_code == 200
     assert response.json()["text"] == "我负责用户访谈，并根据反馈修改原型。"
     assert response.json()["truncated"] is False
+    material_id = response.json()["stored_material_id"]
+    downloaded = authenticated_client.get(f"/api/v1/profile/materials/{material_id}")
+    assert downloaded.status_code == 200
+    assert downloaded.content == "我负责用户访谈，并根据反馈修改原型。".encode("utf-8")
 
 
 def test_extract_docx_paragraphs_and_tables(authenticated_client) -> None:
@@ -77,3 +81,4 @@ def test_multimodal_extract_returns_candidate_region(monkeypatch, authenticated_
     assert response.status_code == 200
     assert response.json()["items"][0]["status"] == "candidate"
     assert response.json()["items"][0]["page"] == 1
+    assert response.json()["stored_material_id"].startswith("material-")

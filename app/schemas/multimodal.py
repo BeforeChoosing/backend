@@ -40,6 +40,7 @@ class MultimodalEvidenceResponse(BaseModel):
     model: str
     items: list[MultimodalEvidenceItem] = Field(default_factory=list, max_length=80)
     rejected_count: int = Field(default=0, ge=0)
+    stored_material_id: str | None = Field(default=None, max_length=120)
     notice: str = (
         "多模态提取结果仅作为候选证据，已保留页码和区域定位；确认前不会写入个人画像。"
     )

@@ -165,6 +165,22 @@ def test_conversation_snapshots_sync_and_remain_account_scoped(api):
     assert c.get('/api/v1/profile/conversation-snapshots', headers=alice).json() == []
 
 
+def test_uploaded_materials_are_account_scoped(api):
+    c, _ = api
+    alice, bob = account(c, 'material-alice'), account(c, 'material-bob')
+    uploaded = c.post(
+        '/api/v1/profile/materials/extract',
+        headers=alice,
+        files={'file': ('private.md', '仅属于 Alice 的材料'.encode(), 'text/markdown')},
+    )
+    assert uploaded.status_code == 200
+    material_id = uploaded.json()['stored_material_id']
+    assert c.get(f'/api/v1/profile/materials/{material_id}', headers=bob).status_code == 404
+    downloaded = c.get(f'/api/v1/profile/materials/{material_id}', headers=alice)
+    assert downloaded.status_code == 200
+    assert downloaded.content == '仅属于 Alice 的材料'.encode()
+
+
 def test_public_catalog_preflight_and_revoked_token(api):
     c, _ = api
     assert c.get('/api/v1/health').status_code == 200
