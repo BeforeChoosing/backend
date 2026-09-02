@@ -66,7 +66,7 @@ def test_selector_uses_card_evidence_instead_of_fixed_task() -> None:
     assert insight_result.selected_task.id != evaluation_result.selected_task.id
 
 
-def test_selector_skips_tasks_with_recorded_evidence() -> None:
+def test_selector_keeps_completed_tasks_available_for_revalidation() -> None:
     card = _card(
         "memory",
         title="用户记忆策略",
@@ -79,7 +79,7 @@ def test_selector_skips_tasks_with_recorded_evidence() -> None:
     second = recommend_trial_task([card], [first.selected_task.id])
 
     assert first.selected_task.id == "M-03"
-    assert second.selected_task.id != first.selected_task.id
+    assert first.selected_task.id in {candidate.task_id for candidate in second.candidates}
     assert first.selected_task.id in second.completed_task_ids
 
 
