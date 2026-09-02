@@ -114,7 +114,9 @@ def test_stream_json_forwards_deltas_and_uses_fast_model(monkeypatch, tmp_path) 
         "system", "user", model=settings.qwen_fast_model, on_delta=deltas.append
     )
 
-    assert result == {"reply": "你好学长"}
+    assert result["reply"] == "你好学长"
+    assert result["_selected_model"] == "qwen3.6-flash"
+    assert result["_model_pool"] == "text:explicit:qwen3.6-flash"
     assert deltas == ['{"reply":"你好', '学长"}']
     assert observed["payload"]["model"] == "qwen3.6-flash"
     assert observed["payload"]["stream"] is True
@@ -172,7 +174,9 @@ def test_generate_json_fails_over_to_another_model_before_returning_error(
         profile_db_path=str(tmp_path / "profile.db"),
     )
 
-    assert llm_gateway.DashScopeQwenGateway(settings).generate_json(
+    result = llm_gateway.DashScopeQwenGateway(settings).generate_json(
         "system", "user", tier="fast"
-    ) == {}
+    )
+    assert result["_selected_model"] == "model-ready"
+    assert result["_model_pool"] == "text:fast"
     assert attempted == ["model-unavailable", "model-ready"]

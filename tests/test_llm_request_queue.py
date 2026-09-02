@@ -177,3 +177,35 @@ def test_five_users_can_use_five_idle_models_concurrently() -> None:
     release.set()
     for thread in threads:
         thread.join(1)
+
+
+def test_global_queue_caps_concurrent_starts_at_six() -> None:
+    queue = LLMRequestQueue(
+        max_concurrency=6,
+        max_requests_per_minute=60,
+        model_max_concurrency=1,
+    )
+    started = [Event() for _ in range(7)]
+    release = Event()
+
+    def run(index: int) -> None:
+        with queue.admission(
+            request_id=f"req-six-{index}",
+            user_id=f"user-six-{index}",
+            candidate_models=(f"model-six-{index}",),
+            pool="text:shared",
+        ):
+            started[index].set()
+            release.wait(2)
+
+    threads = [Thread(target=run, args=(index,)) for index in range(7)]
+    for thread in threads:
+        thread.start()
+    assert all(event.wait(1) for event in started[:6])
+    sleep(0.05)
+    assert not started[6].is_set()
+
+    release.set()
+    for thread in threads:
+        thread.join(1)
+    assert started[6].is_set()

@@ -69,9 +69,9 @@ class DashScopeEmbeddingGateway:
             self.settings.bailian_embedding_url, self.settings.dashscope_api_key, payload,
             self.settings.request_timeout_seconds, service_name="Embedding",
             error_type=EmbeddingGatewayError,
-            max_concurrency=getattr(self.settings, "llm_max_concurrency", 2),
+            max_concurrency=getattr(self.settings, "llm_max_concurrency", 6),
             max_requests_per_minute=getattr(
-                self.settings, "llm_max_requests_per_minute", 30
+                self.settings, "llm_max_requests_per_minute", 60
             ),
             model_max_concurrency=getattr(
                 self.settings, "llm_model_max_concurrency", 1
@@ -221,9 +221,9 @@ class DashScopeRerankGateway:
             self.settings.request_timeout_seconds,
             service_name="Rerank",
             error_type=RerankGatewayError,
-            max_concurrency=getattr(self.settings, "llm_max_concurrency", 2),
+            max_concurrency=getattr(self.settings, "llm_max_concurrency", 6),
             max_requests_per_minute=getattr(
-                self.settings, "llm_max_requests_per_minute", 30
+                self.settings, "llm_max_requests_per_minute", 60
             ),
             model_max_concurrency=getattr(
                 self.settings, "llm_model_max_concurrency", 1

@@ -16,6 +16,7 @@ from app.schemas.profile import (
     ProfileConversationMessage,
     ProfileExplorationRequest,
     ProfileExplorationResponse,
+    StarDimension,
 )
 
 
@@ -28,7 +29,10 @@ EXPLORATION_DIMENSIONS: tuple[ExplorationFocus, ...] = (
     "transfer",
     "evidence",
 )
-CONTROLLER_VERSION = "profile-exploration-coverage-v1"
+CONTROLLER_VERSION = "profile-exploration-coverage-v2-star"
+
+STAR_DIMENSIONS: tuple[StarDimension, ...] = ("S", "T", "A", "R")
+_STOP_TERMS = ("不知道了", "停止", "结束", "不想继续", "直接总结", "不用再问")
 
 _STATUS_RANK: dict[ExplorationCoverageStatus, int] = {
     "missing": 0,
@@ -94,6 +98,10 @@ class ExplorationCoverage:
     next_focus: ExplorationFocus
     ready_for_proposal: bool
     user_text_length: int
+    star_dimension: StarDimension
+    round_number: int
+    next_action: str
+    finalization_reason: str | None
 
 
 def _contains_group(text: str, group: tuple[str, ...]) -> bool:
@@ -174,11 +182,31 @@ def assess_exploration(request: ProfileExplorationRequest) -> ExplorationCoverag
     # unlocking card proposals.  It is deliberately below the API maximum so
     # a concise but concrete experience can pass after one or two turns.
     ready_for_proposal = len(text) >= 80 and core_ready and context_ready
+    round_number = min(max(request.round_number, 1), 4)
+    # Keep the four user-facing turns stable: S → T → A → R.  The model may
+    # still phrase a more precise question inside that dimension, but it must
+    # not skip a turn merely because the original experience happened to use a
+    # cue word such as “目标” or “结果”.  A cue word is not proof that the
+    # corresponding STAR evidence is complete.
+    history = set(request.star_history)
+    star_candidates = [dimension for dimension in STAR_DIMENSIONS if dimension not in history]
+    star_dimension = star_candidates[0] if star_candidates else STAR_DIMENSIONS[-1]
+    stop_requested = request.stop_requested or any(
+        term in message.content for message in request.messages if message.role == "user" for term in _STOP_TERMS
+    )
+    next_action = "summarize" if stop_requested or round_number >= 4 else "ask"
+    finalization_reason = (
+        "用户选择停止补充" if stop_requested else "已完成四个 STAR 维度的追问" if round_number >= 4 else None
+    )
     return ExplorationCoverage(
         status=status,
         next_focus=next_focus,
         ready_for_proposal=ready_for_proposal,
         user_text_length=len(text),
+        star_dimension=star_dimension,
+        round_number=round_number,
+        next_action=next_action,
+        finalization_reason=finalization_reason,
     )
 
 
@@ -199,5 +227,9 @@ def apply_exploration_controller(
             "ready_for_proposal": coverage.ready_for_proposal,
             "coverage": coverage.status,
             "evidence_gap": gap,
+            "star_dimension": coverage.star_dimension,
+            "round_number": coverage.round_number,
+            "next_action": coverage.next_action,
+            "finalization_reason": coverage.finalization_reason,
         }
     )

@@ -12,6 +12,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from app.agents.profile_agent import ProfileAgent
 from app.config import get_settings
 from app.schemas.profile import (
+    MaterialUnderstandingRequest,
+    MaterialUnderstandingResponse,
     ConfirmProfileCardsRequest,
     MaterialExtractResponse,
     ProfileExplorationRequest,
@@ -50,6 +52,7 @@ router = APIRouter(prefix="/profile", tags=["profile"])
 MAX_MATERIAL_BYTES = 20 * 1024 * 1024
 _exploration_locks: dict[str, asyncio.Lock] = {}
 _proposal_locks: dict[str, asyncio.Lock] = {}
+_material_understanding_locks: dict[str, asyncio.Lock] = {}
 _CONVERSATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,120}$")
 
 
@@ -132,6 +135,63 @@ def _material_metadata(file_name: str, data: bytes, *, content_type: str | None)
     }
 
 
+@router.post("/materials/understand", response_model=MaterialUnderstandingResponse)
+async def understand_profile_material(
+    request: MaterialUnderstandingRequest,
+) -> MaterialUnderstandingResponse:
+    """Turn extracted/OCR text into user-selectable experience candidates.
+
+    Text extraction and visual OCR deliberately remain separate from this
+    step.  The second, small model call gives the user a concrete choice of
+    which experience to discuss instead of ending the interaction after OCR.
+    """
+
+    cache_key = ModelResponseCache.fingerprint(
+        {
+            "prompt_version": ProfileAgent.MATERIAL_PROMPT_VERSION,
+            "file_name": request.file_name,
+            "text": request.text,
+            "stored_material_id": request.stored_material_id,
+        }
+    )
+    lock = _material_understanding_locks.setdefault(cache_key, asyncio.Lock())
+    async with lock:
+        cached = _model_cache().get("profile-material-understanding", cache_key)
+        if cached is not None:
+            try:
+                response = MaterialUnderstandingResponse.model_validate(cached)
+                return response.model_copy(update={"cache_hit": True})
+            except ValueError:
+                logger.warning("discarding invalid cached material understanding")
+        trace_id = uuid4().hex
+        try:
+            response = await _profile_agent().understand_material(request, trace_id)
+            response = response.model_copy(update={"cache_hit": False})
+            _model_cache().set(
+                "profile-material-understanding",
+                cache_key,
+                response.model_dump(mode="json"),
+            )
+            _record_business_event(
+                "profile_material",
+                "profile.material.understand",
+                {
+                    "trace_id": response.trace_id,
+                    "file_name": request.file_name,
+                    "candidate_count": len(response.experience_candidates),
+                    "model": response.model,
+                    "cached": False,
+                },
+            )
+            return response
+        except LLMGatewayError as exc:
+            logger.warning("material understanding failed trace_id=%s reason=%s", trace_id, exc)
+            raise HTTPException(status_code=llm_error_status(exc), detail=str(exc)) from exc
+        except (ValueError, TypeError) as exc:
+            logger.warning("material understanding invalid trace_id=%s reason=%s", trace_id, exc)
+            raise HTTPException(status_code=502, detail="材料经历整理没有完成，请稍后重试。") from exc
+
+
 @router.post("/exploration/messages", response_model=ProfileExplorationResponse)
 async def create_profile_exploration_message(
     request: ProfileExplorationRequest,
@@ -147,6 +207,9 @@ async def create_profile_exploration_message(
             "target_role": request.target_role,
             "existing_card_titles": request.existing_card_titles,
             "model_tier": request.model_tier,
+            "round_number": request.round_number,
+            "star_history": request.star_history,
+            "stop_requested": request.stop_requested,
         }
     )
     lock = _exploration_locks.setdefault(cache_key, asyncio.Lock())
@@ -208,6 +271,9 @@ async def stream_profile_exploration_message(
             "target_role": request.target_role,
             "existing_card_titles": request.existing_card_titles,
             "model_tier": request.model_tier,
+            "round_number": request.round_number,
+            "star_history": request.star_history,
+            "stop_requested": request.stop_requested,
         }
     )
     lock = _exploration_locks.setdefault(cache_key, asyncio.Lock())

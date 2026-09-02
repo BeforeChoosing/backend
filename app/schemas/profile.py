@@ -27,6 +27,7 @@ ExplorationFocus = Literal[
 ]
 ExplorationCoverageStatus = Literal["missing", "weak", "sufficient", "confirmed"]
 ModelTier = Literal["fast", "balanced", "reasoning"]
+StarDimension = Literal["S", "T", "A", "R"]
 
 
 class ProfileConversationMessage(BaseModel):
@@ -47,6 +48,13 @@ class ProfileExplorationRequest(BaseModel):
     existing_card_titles: list[str] = Field(default_factory=list, max_length=20)
     request_id: str | None = Field(default=None, min_length=8, max_length=100)
     model_tier: ModelTier = "fast"
+    # The client sends the current STAR round so the server can keep the
+    # coaching target stable across retries and browsers.  Content validation
+    # remains intentionally permissive; this is routing state, not an answer
+    # quality gate.
+    round_number: int = Field(default=1, ge=1, le=4)
+    star_history: list[StarDimension] = Field(default_factory=list, max_length=4)
+    stop_requested: bool = False
 
 
 class ProfileExplorationResponse(BaseModel):
@@ -62,6 +70,10 @@ class ProfileExplorationResponse(BaseModel):
     model_pool: str | None = Field(default=None, max_length=120)
     cache_hit: bool = False
     notice: str = "潜能线索仅用于继续补充经历，确认前不会写入个人画像。"
+    star_dimension: StarDimension = "S"
+    round_number: int = Field(default=1, ge=1, le=4)
+    next_action: Literal["ask", "summarize"] = "ask"
+    finalization_reason: str | None = Field(default=None, max_length=160)
 
 
 class ProfileConversationSnapshotMessage(BaseModel):
@@ -110,6 +122,35 @@ class MaterialExtractResponse(BaseModel):
     truncated: bool = False
     stored_material_id: str = Field(min_length=1, max_length=120)
     notice: str = "仅提取文档中的可复制文本；内容需由用户核对，且尚未写入长期画像。"
+
+
+class AttachmentExperienceCandidate(BaseModel):
+    """A material-backed experience the user can choose to explore."""
+
+    id: str = Field(min_length=1, max_length=80)
+    title: str = Field(min_length=1, max_length=80)
+    excerpt: str = Field(min_length=1, max_length=500)
+    why_worth_exploring: str = Field(min_length=1, max_length=240)
+    suggested_focus: StarDimension = "S"
+    source_refs: list[str] = Field(default_factory=list, max_length=10)
+
+
+class MaterialUnderstandingRequest(BaseModel):
+    file_name: str = Field(default="材料", min_length=1, max_length=240)
+    text: str = Field(min_length=1, max_length=12000)
+    stored_material_id: str | None = Field(default=None, max_length=120)
+
+
+class MaterialUnderstandingResponse(BaseModel):
+    trace_id: str
+    file_name: str
+    summary: str = Field(min_length=1, max_length=500)
+    experience_candidates: list[AttachmentExperienceCandidate] = Field(default_factory=list, max_length=5)
+    suggested_action: Literal["explore", "generate"] = "explore"
+    model: str | None = Field(default=None, max_length=120)
+    model_pool: str | None = Field(default=None, max_length=120)
+    cache_hit: bool = False
+    notice: str = "材料内容仅作为候选证据；请选择一段经历继续聊聊，或直接生成候选能力卡。"
 
 
 class ExperienceSummary(BaseModel):

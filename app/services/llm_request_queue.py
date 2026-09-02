@@ -1,7 +1,7 @@
 """Process-local FIFO admission queue for all DashScope chat requests.
 
 The current deployment intentionally uses one Uvicorn worker.  A process-local
-queue therefore gives the five-user demo deterministic ordering without adding
+queue therefore gives the small demo deterministic ordering without adding
 Redis.  If the API is later scaled to multiple workers, this module should be
 backed by Redis while preserving the same public status contract.
 """

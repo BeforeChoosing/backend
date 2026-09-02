@@ -2,7 +2,11 @@
 import pytest
 
 from app.api import profile as profile_api
-from app.schemas.profile import CardProposal
+from app.schemas.profile import (
+    AttachmentExperienceCandidate,
+    CardProposal,
+    MaterialUnderstandingResponse,
+)
 from app.schemas.profile import ProfileExplorationRequest, ProfileExplorationResponse
 from app.services.profile_store import ProfileStore
 from app.schemas.trial import ObservedEvidence, TrialEvaluation, TrialDimensionEvaluation
@@ -126,6 +130,55 @@ class _FakeProfileExplorationAgent:
             model="qwen-test",
             model_pool="fast",
         )
+
+
+class _FakeMaterialUnderstandingAgent:
+    def __init__(self):
+        self.calls = 0
+
+    async def understand_material(self, request, trace_id):
+        self.calls += 1
+        return MaterialUnderstandingResponse(
+            trace_id=trace_id,
+            file_name=request.file_name,
+            summary="材料中有一段用户访谈与上线结果，适合继续核对。",
+            experience_candidates=[
+                AttachmentExperienceCandidate(
+                    id="candidate-1",
+                    title="校园项目",
+                    excerpt="访谈用户并完成上线。",
+                    why_worth_exploring="包含行动和结果，可以继续补充判断依据。",
+                    suggested_focus="A",
+                    source_refs=["material:one"],
+                )
+            ],
+            suggested_action="explore",
+            model="qwen3.6-flash",
+            model_pool="text:fast",
+        )
+
+
+def test_material_understanding_returns_selectable_experiences_and_caches_result(
+    tmp_path, monkeypatch, authenticated_client
+):
+    store = ProfileStore(tmp_path / "profile.db")
+    agent = _FakeMaterialUnderstandingAgent()
+    monkeypatch.setattr(profile_api, "_profile_store", lambda: store)
+    monkeypatch.setattr(profile_api, "_profile_agent", lambda: agent)
+    payload = {
+        "file_name": "resume.txt",
+        "text": "访谈用户并完成上线。",
+        "stored_material_id": "material-one",
+    }
+
+    first = authenticated_client.post("/api/v1/profile/materials/understand", json=payload)
+    second = authenticated_client.post("/api/v1/profile/materials/understand", json=payload)
+
+    assert first.status_code == 200
+    assert first.json()["experience_candidates"][0]["suggested_focus"] == "A"
+    assert first.json()["cache_hit"] is False
+    assert second.json()["cache_hit"] is True
+    assert agent.calls == 1
 
 
 def test_profile_exploration_reuses_identical_model_result(tmp_path, monkeypatch, authenticated_client):
