@@ -134,7 +134,7 @@ class QuestionExplorationGateway(ExplorationGateway):
         return payload
 
 
-def test_profile_agent_exploration_normalizes_invalid_prompt_shape():
+def test_profile_agent_exploration_preserves_valid_question_reply():
     response = asyncio.run(ProfileAgent(QuestionExplorationGateway()).explore(
         ProfileExplorationRequest(
             experience_text="我在校园项目中负责访谈用户并整理需求，随后和团队完成了产品原型。",
@@ -143,4 +143,4 @@ def test_profile_agent_exploration_normalizes_invalid_prompt_shape():
     ))
 
     assert response.focus_dimension == "ownership"
-    assert "？" not in response.reply
+    assert response.reply == "你具体做了什么？"

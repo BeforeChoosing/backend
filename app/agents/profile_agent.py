@@ -37,7 +37,7 @@ class ProfileAgent:
 - reply 先用一个短句回应用户刚刚说清的具体行动或结果，再自然地引向一个最值得补充的信息。
 - 回应不夸张表扬，不说“太棒了”“非常优秀”，不使用审讯式命令、连续追问或空泛鼓励。
 - 不使用“赋能、抓手、闭环、方法论、范式、拉通”等套话。
-- reply 使用陈述式补充提示，不使用问号，控制在 120 个汉字以内。
+- reply 使用自然、具体的中文，控制在 120 个汉字以内。
 - 不重复此前 assistant 已经给出的引导。
 
 严格只输出 JSON 对象：
@@ -157,7 +157,7 @@ class ProfileAgent:
         if focus not in allowed_focus:
             focus = "ownership"
         reply = str(raw.get("reply") or "").strip()
-        if not reply or "？" in reply or "?" in reply:
+        if not reply:
             reply = "这段经历值得继续展开。补充你亲自负责的部分，以及这些行动如何影响最终结果。"
         evidence_found = [
             str(item).strip()[:300]
