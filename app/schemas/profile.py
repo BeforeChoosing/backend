@@ -56,6 +56,10 @@ class ProfileExplorationRequest(BaseModel):
     round_number: int = Field(default=1, ge=1, le=4)
     star_history: list[StarDimension] = Field(default_factory=list, max_length=4)
     stop_requested: bool = False
+    # Once all four STAR prompts are complete, users can still add facts to
+    # the same experience. The agent must acknowledge those facts without
+    # starting a fifth guided question.
+    supplement_only: bool = False
 
 
 class ProfileExplorationResponse(BaseModel):

@@ -140,3 +140,18 @@ def test_controller_stop_intent_summarizes_without_answer_quality_gate():
 
     assert assessment.next_action == "summarize"
     assert assessment.finalization_reason == "用户选择停止补充"
+
+
+def test_controller_keeps_four_round_boundary_in_supplement_only_mode():
+    request = ProfileExplorationRequest(
+        experience_text="我负责访谈用户并根据反馈调整方案，最终完成上线。",
+        round_number=4,
+        star_history=["S", "T", "A", "R"],
+        supplement_only=True,
+    )
+
+    assessment = assess_exploration(request)
+
+    assert assessment.next_action == "summarize"
+    assert assessment.finalization_reason == "四轮后继续补充当前经历"
+    assert assessment.round_number == 4

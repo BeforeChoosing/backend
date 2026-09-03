@@ -216,6 +216,7 @@ async def create_profile_exploration_message(
             "round_number": request.round_number,
             "star_history": request.star_history,
             "stop_requested": request.stop_requested,
+            "supplement_only": request.supplement_only,
         }
     )
     lock = _exploration_locks.setdefault(cache_key, asyncio.Lock())
@@ -280,6 +281,7 @@ async def stream_profile_exploration_message(
             "round_number": request.round_number,
             "star_history": request.star_history,
             "stop_requested": request.stop_requested,
+            "supplement_only": request.supplement_only,
         }
     )
     lock = _exploration_locks.setdefault(cache_key, asyncio.Lock())

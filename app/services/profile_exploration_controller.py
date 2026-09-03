@@ -194,9 +194,19 @@ def assess_exploration(request: ProfileExplorationRequest) -> ExplorationCoverag
     stop_requested = request.stop_requested or any(
         term in message.content for message in request.messages if message.role == "user" for term in _STOP_TERMS
     )
-    next_action = "summarize" if stop_requested or round_number >= 4 else "ask"
+    next_action = (
+        "summarize"
+        if request.supplement_only or stop_requested or round_number >= 4
+        else "ask"
+    )
     finalization_reason = (
-        "用户选择停止补充" if stop_requested else "已完成四个 STAR 维度的追问" if round_number >= 4 else None
+        "四轮后继续补充当前经历"
+        if request.supplement_only
+        else "用户选择停止补充"
+        if stop_requested
+        else "已完成四个 STAR 维度的追问"
+        if round_number >= 4
+        else None
     )
     return ExplorationCoverage(
         status=status,

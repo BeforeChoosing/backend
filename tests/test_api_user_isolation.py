@@ -236,7 +236,7 @@ def test_memory_reset_clears_only_current_account_and_keeps_login(api):
     assert reset.json()['cleared'] is True
     assert reset.json()['removed_records'] >= 4
     assert reset.json()['removed_files'] == 1
-    assert reset.json()['version'] == '1.1.0'
+    assert reset.json()['version'] == '1.1.2'
 
     assert c.get('/api/v1/auth/me', headers=alice).status_code == 200
     assert c.get('/api/v1/profile/overview', headers=alice).json()['cards'] == []
@@ -262,7 +262,7 @@ def test_public_catalog_preflight_and_revoked_token(api):
     c, _ = api
     health = c.get('/api/v1/health')
     assert health.status_code == 200
-    assert health.json()['version'] == '1.1.0'
+    assert health.json()['version'] == '1.1.2'
     assert c.get('/api/v1/trial/catalog', headers={'X-App-Mode': 'demo'}).status_code == 200
     assert c.options('/api/v1/profile/cards', headers={
         'Origin': 'http://localhost:3000', 'Access-Control-Request-Method': 'GET',
