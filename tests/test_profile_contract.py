@@ -5,7 +5,10 @@ from app.schemas.profile import ProfileExplorationRequest, ProfileProposalReques
 
 
 class FakeGateway:
-    def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
+    class settings:
+        qwen_fast_model = "qwen3.6-flash"
+
+    def generate_json(self, system_prompt: str, user_prompt: str, **kwargs) -> dict:
         return {
             "experience": {
                 "title": "校园项目",
@@ -43,9 +46,14 @@ def test_profile_agent_returns_pending_cards():
     assert response.card_proposals[0].source_refs == ["input:experience_text"]
 
 
+def test_profile_requests_accept_any_non_empty_user_input():
+    assert ProfileExplorationRequest(experience_text="你是谁").experience_text == "你是谁"
+    assert ProfileProposalRequest(experience_text="你是谁").experience_text == "你是谁"
+
+
 class InventedQuoteGateway(FakeGateway):
-    def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
-        payload = super().generate_json(system_prompt, user_prompt)
+    def generate_json(self, system_prompt: str, user_prompt: str, **kwargs) -> dict:
+        payload = super().generate_json(system_prompt, user_prompt, **kwargs)
         payload["card_proposals"][0]["claim_level"] = "fact"
         payload["card_proposals"][0]["evidence_type"] = "documented_fact"
         payload["card_proposals"][0]["evidence_quote"] = "获得全国一等奖"
@@ -65,7 +73,11 @@ def test_profile_agent_downgrades_unverifiable_quote():
 
 
 class ExplorationGateway:
-    def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
+    class settings:
+        qwen_fast_model = "qwen3.6-flash"
+
+    def generate_json(self, system_prompt: str, user_prompt: str, **kwargs) -> dict:
+        assert kwargs["tier"] == "fast"
         assert "不重复此前 assistant 已经给出的引导" in system_prompt
         assert "先用一个短句回应用户刚刚说清的具体行动或结果" in system_prompt
         assert "不像审核表或访谈提纲" in system_prompt
@@ -95,15 +107,34 @@ def test_profile_agent_exploration_returns_one_evidence_bound_focus():
     assert response.ready_for_proposal is False
 
 
+def test_profile_agent_forwards_user_selected_model_tier():
+    class TierGateway(ExplorationGateway):
+        def generate_json(self, system_prompt: str, user_prompt: str, **kwargs) -> dict:
+            assert kwargs["tier"] == "reasoning"
+            return {
+                "reply": "补充你整理需求时采用的筛选标准，以及这些标准如何影响后续方案。",
+                "focus_dimension": "decision",
+                "evidence_found": ["用户明确负责整理需求"],
+                "evidence_gap": "仍缺少需求筛选的判断依据。",
+                "potential_hypotheses": ["可能具备需求判断潜能，仍需验证。"],
+                "ready_for_proposal": False,
+            }
+
+    asyncio.run(ProfileAgent(TierGateway()).explore(
+        ProfileExplorationRequest(experience_text="我负责整理需求。", model_tier="reasoning"),
+        "trace-tier",
+    ))
+
+
 class QuestionExplorationGateway(ExplorationGateway):
-    def generate_json(self, system_prompt: str, user_prompt: str) -> dict:
-        payload = super().generate_json(system_prompt, user_prompt)
+    def generate_json(self, system_prompt: str, user_prompt: str, **kwargs) -> dict:
+        payload = super().generate_json(system_prompt, user_prompt, **kwargs)
         payload["reply"] = "你具体做了什么？"
         payload["focus_dimension"] = "unknown"
         return payload
 
 
-def test_profile_agent_exploration_normalizes_invalid_prompt_shape():
+def test_profile_agent_exploration_preserves_valid_question_reply():
     response = asyncio.run(ProfileAgent(QuestionExplorationGateway()).explore(
         ProfileExplorationRequest(
             experience_text="我在校园项目中负责访谈用户并整理需求，随后和团队完成了产品原型。",
@@ -112,4 +143,4 @@ def test_profile_agent_exploration_normalizes_invalid_prompt_shape():
     ))
 
     assert response.focus_dimension == "ownership"
-    assert "？" not in response.reply
+    assert response.reply == "你具体做了什么？"

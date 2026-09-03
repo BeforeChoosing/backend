@@ -1,7 +1,13 @@
 
+import pytest
+
 from app.api import profile as profile_api
-from app.schemas.profile import CardProposal
-from app.schemas.profile import ProfileExplorationResponse
+from app.schemas.profile import (
+    AttachmentExperienceCandidate,
+    CardProposal,
+    MaterialUnderstandingResponse,
+)
+from app.schemas.profile import ProfileExplorationRequest, ProfileExplorationResponse
 from app.services.profile_store import ProfileStore
 from app.schemas.trial import ObservedEvidence, TrialEvaluation, TrialDimensionEvaluation
 
@@ -105,7 +111,74 @@ class _FakeProfileExplorationAgent:
             evidence_gap="仍缺少范围取舍的判断依据。",
             potential_hypotheses=["可能具备产品范围判断潜能，仍需验证。"],
             ready_for_proposal=False,
+            model="qwen-test",
+            model_pool="fast",
         )
+
+    def explore_stream(self, request, trace_id, *, on_delta):
+        self.calls += 1
+        on_delta('{"reply":"补充你如何')
+        on_delta('根据访谈确定范围。","focus_dimension":"decision"}')
+        return ProfileExplorationResponse(
+            trace_id=trace_id,
+            reply="补充你如何根据访谈确定范围。",
+            focus_dimension="decision",
+            evidence_found=["负责用户访谈"],
+            evidence_gap="仍缺少范围取舍的判断依据。",
+            potential_hypotheses=["可能具备产品范围判断潜能，仍需验证。"],
+            ready_for_proposal=False,
+            model="qwen-test",
+            model_pool="fast",
+        )
+
+
+class _FakeMaterialUnderstandingAgent:
+    def __init__(self):
+        self.calls = 0
+
+    async def understand_material(self, request, trace_id):
+        self.calls += 1
+        return MaterialUnderstandingResponse(
+            trace_id=trace_id,
+            file_name=request.file_name,
+            summary="材料中有一段用户访谈与上线结果，适合继续核对。",
+            experience_candidates=[
+                AttachmentExperienceCandidate(
+                    id="candidate-1",
+                    title="校园项目",
+                    excerpt="访谈用户并完成上线。",
+                    why_worth_exploring="包含行动和结果，可以继续补充判断依据。",
+                    suggested_focus="A",
+                    source_refs=["material:one"],
+                )
+            ],
+            suggested_action="explore",
+            model="qwen3.6-flash",
+            model_pool="text:fast",
+        )
+
+
+def test_material_understanding_returns_selectable_experiences_and_caches_result(
+    tmp_path, monkeypatch, authenticated_client
+):
+    store = ProfileStore(tmp_path / "profile.db")
+    agent = _FakeMaterialUnderstandingAgent()
+    monkeypatch.setattr(profile_api, "_profile_store", lambda: store)
+    monkeypatch.setattr(profile_api, "_profile_agent", lambda: agent)
+    payload = {
+        "file_name": "resume.txt",
+        "text": "访谈用户并完成上线。",
+        "stored_material_id": "material-one",
+    }
+
+    first = authenticated_client.post("/api/v1/profile/materials/understand", json=payload)
+    second = authenticated_client.post("/api/v1/profile/materials/understand", json=payload)
+
+    assert first.status_code == 200
+    assert first.json()["experience_candidates"][0]["suggested_focus"] == "A"
+    assert first.json()["cache_hit"] is False
+    assert second.json()["cache_hit"] is True
+    assert agent.calls == 1
 
 
 def test_profile_exploration_reuses_identical_model_result(tmp_path, monkeypatch, authenticated_client):
@@ -125,7 +198,10 @@ def test_profile_exploration_reuses_identical_model_result(tmp_path, monkeypatch
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert first.json() == second.json()
+    assert first.json()["cache_hit"] is False
+    assert second.json()["cache_hit"] is True
+    assert first.json()["model"] == second.json()["model"] == "qwen-test"
+    assert first.json()["reply"] == second.json()["reply"]
     assert agent.calls == 1
 
 
@@ -149,3 +225,72 @@ def test_profile_exploration_server_owns_focus_and_readiness(tmp_path, monkeypat
     assert payload["focus_dimension"] == "decision"
     assert payload["ready_for_proposal"] is False
     assert payload["coverage"]["decision"] == "missing"
+
+
+def test_profile_exploration_accepts_a_short_conversational_opening(
+    tmp_path, monkeypatch, authenticated_client
+):
+    """The chat composer promises free-form input, including a brief opening."""
+    store = ProfileStore(tmp_path / "profile.db")
+    agent = _FakeProfileExplorationAgent()
+    monkeypatch.setattr(profile_api, "_profile_store", lambda: store)
+    monkeypatch.setattr(profile_api, "_profile_agent", lambda: agent)
+
+    response = authenticated_client.post(
+        "/api/v1/profile/exploration/messages",
+        json={
+            "experience_text": "你是谁",
+            "messages": [{"role": "user", "content": "你是谁"}],
+            "request_id": "request-short-opening",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["reply"]
+    assert agent.calls == 1
+
+
+def test_profile_exploration_stream_emits_reply_before_final_payload(
+    tmp_path, monkeypatch, authenticated_client
+):
+    store = ProfileStore(tmp_path / "profile.db")
+    agent = _FakeProfileExplorationAgent()
+    monkeypatch.setattr(profile_api, "_profile_store", lambda: store)
+    monkeypatch.setattr(profile_api, "_profile_agent", lambda: agent)
+
+    response = authenticated_client.post(
+        "/api/v1/profile/exploration/messages/stream",
+        json={
+            "experience_text": "我负责访谈用户并整理需求。",
+            "messages": [{"role": "user", "content": "我访谈了十五位用户。"}],
+            "request_id": "request-stream-001",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text.index("event: delta") < response.text.index("event: done")
+    assert '"text":"补充你如何"' in response.text
+    assert '"reply":"补充你如何根据访谈确定范围。"' in response.text
+    assert '"model":"qwen-test"' in response.text
+    assert '"cache_hit":false' in response.text
+    assert agent.calls == 1
+
+
+def test_profile_exploration_accepts_fifty_context_messages():
+    messages = [
+        {"role": "user" if index % 2 == 0 else "assistant", "content": f"第 {index + 1} 条"}
+        for index in range(50)
+    ]
+    request = ProfileExplorationRequest.model_validate(
+        {"experience_text": "测试上下文", "messages": messages}
+    )
+    assert len(request.messages) == 50
+
+
+def test_profile_exploration_rejects_more_than_fifty_context_messages():
+    messages = [{"role": "user", "content": f"第 {index + 1} 条"} for index in range(51)]
+    with pytest.raises(ValueError):
+        ProfileExplorationRequest.model_validate(
+            {"experience_text": "测试上下文", "messages": messages}
+        )

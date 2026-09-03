@@ -86,7 +86,7 @@ class KnowledgeRetriever:
         self._ensure_index()
 
     def rebuild(self) -> int:
-        documents = sorted(self.source_dir.rglob("*.md"))
+        documents = self._markdown_documents()
         manifest = self._read_manifest()
         document_meta = self._document_meta(manifest)
         fingerprint = self._fingerprint(documents)
@@ -428,7 +428,7 @@ class KnowledgeRetriever:
         )
 
     def _ensure_index(self) -> None:
-        documents = sorted(self.source_dir.rglob("*.md"))
+        documents = self._markdown_documents()
         if not documents:
             raise FileNotFoundError(f"本地知识库目录为空：{self.source_dir}")
         fingerprint = self._fingerprint(documents)
@@ -443,6 +443,13 @@ class KnowledgeRetriever:
         except sqlite3.OperationalError:
             pass
         self.rebuild()
+
+    def _markdown_documents(self) -> list[Path]:
+        """Return real Markdown files, excluding macOS metadata and hidden files."""
+        return sorted(
+            path for path in self.source_dir.rglob("*.md")
+            if not any(part.startswith(".") for part in path.relative_to(self.source_dir).parts)
+        )
 
     @staticmethod
     def _ensure_metadata_columns(connection: sqlite3.Connection) -> None:

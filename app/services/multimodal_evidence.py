@@ -8,6 +8,7 @@ from typing import Any
 from app.config import get_settings
 from app.schemas.multimodal import MultimodalEvidenceItem, MultimodalEvidenceResponse
 from app.services.vision_gateway import DashScopeVisionGateway, VisionImage
+from app.services.model_registry import VisionModelPool
 
 
 class MultimodalExtractionError(ValueError):
@@ -29,10 +30,18 @@ quote 必须是图片中可读的连续文字；不要合并相距很远的区�
     MAX_TOTAL_IMAGE_BYTES = 18 * 1024 * 1024
     MAX_RENDER_WIDTH = 1400
 
-    def __init__(self, gateway: Any | None = None, *, model: str | None = None, max_pages: int | None = None):
+    def __init__(
+        self,
+        gateway: Any | None = None,
+        *,
+        model: str | None = None,
+        pool: VisionModelPool = "ocr",
+        max_pages: int | None = None,
+    ):
         settings = get_settings()
         self.gateway = gateway or DashScopeVisionGateway(settings)
-        self.model = (model or settings.bailian_vision_model).strip()
+        self.model = model.strip() if model else None
+        self.pool = pool
         self.max_pages = max(1, max_pages or settings.multimodal_max_pages)
 
     async def extract(
@@ -48,20 +57,31 @@ quote 必须是图片中可读的连续文字；不要合并相距很远的区�
         images, page_count, actual_mime = self._prepare_images(file_name, data, mime_type)
         if sum(len(image.data) for image in images) > self.MAX_TOTAL_IMAGE_BYTES:
             raise MultimodalExtractionError("材料渲染后超过视觉接口大小限制，请拆分文件后重试。")
-        raw = await asyncio.to_thread(
-            self.gateway.generate_json,
-            self.SYSTEM_PROMPT,
-            self.USER_PROMPT,
-            images,
-            model=self.model,
-        )
+        if hasattr(self.gateway, "generate_json_with_model"):
+            raw, selected_model = await asyncio.to_thread(
+                self.gateway.generate_json_with_model,
+                self.SYSTEM_PROMPT,
+                self.USER_PROMPT,
+                images,
+                model=self.model,
+                pool=self.pool,
+            )
+        else:
+            selected_model = self.model or get_settings().bailian_vision_model
+            raw = await asyncio.to_thread(
+                self.gateway.generate_json,
+                self.SYSTEM_PROMPT,
+                self.USER_PROMPT,
+                images,
+                model=selected_model,
+            )
         return self._normalize(
             raw,
             file_name=file_name,
             file_sha=file_sha,
             mime_type=actual_mime,
             page_count=page_count,
-            model=self.model,
+            model=selected_model,
         )
 
     def _prepare_images(

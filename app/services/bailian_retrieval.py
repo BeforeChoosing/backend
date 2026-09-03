@@ -16,8 +16,10 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from app.config import Settings
-from app.services.llm_gateway import LLMGatewayError
+from app.services.llm_gateway import LLMGatewayCancelledError, LLMGatewayError
 from app.services.audit_log import record_model_call
+from app.services.llm_request_queue import LLMRequestCancelled, get_llm_request_queue
+from app.services.request_context import get_request_context
 
 
 class BailianRetrievalError(LLMGatewayError):
@@ -67,6 +69,13 @@ class DashScopeEmbeddingGateway:
             self.settings.bailian_embedding_url, self.settings.dashscope_api_key, payload,
             self.settings.request_timeout_seconds, service_name="Embedding",
             error_type=EmbeddingGatewayError,
+            max_concurrency=getattr(self.settings, "llm_max_concurrency", 6),
+            max_requests_per_minute=getattr(
+                self.settings, "llm_max_requests_per_minute", 60
+            ),
+            model_max_concurrency=getattr(
+                self.settings, "llm_model_max_concurrency", 1
+            ),
         )
         record_model_call(
             getattr(self.settings, "profile_db_path", "profile.db"), service="embedding",
@@ -212,6 +221,13 @@ class DashScopeRerankGateway:
             self.settings.request_timeout_seconds,
             service_name="Rerank",
             error_type=RerankGatewayError,
+            max_concurrency=getattr(self.settings, "llm_max_concurrency", 6),
+            max_requests_per_minute=getattr(
+                self.settings, "llm_max_requests_per_minute", 60
+            ),
+            model_max_concurrency=getattr(
+                self.settings, "llm_model_max_concurrency", 1
+            ),
         )
         record_model_call(
             getattr(self.settings, "profile_db_path", "profile.db"), service="rerank",
@@ -259,6 +275,9 @@ def _post_json(
     *,
     service_name: str,
     error_type: type[BailianRetrievalError],
+    max_concurrency: int,
+    max_requests_per_minute: int,
+    model_max_concurrency: int = 1,
 ) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
@@ -269,9 +288,18 @@ def _post_json(
         },
         method="POST",
     )
+    context = get_request_context()
+    queue = get_llm_request_queue(
+        max_concurrency=max_concurrency,
+        max_requests_per_minute=max_requests_per_minute,
+        model_max_concurrency=model_max_concurrency,
+    )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw_body = response.read().decode("utf-8")
+        with queue.admission(request_id=context.request_id, user_id=context.user_id):
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw_body = response.read().decode("utf-8")
+    except LLMRequestCancelled as exc:
+        raise LLMGatewayCancelledError(str(exc)) from exc
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500]
         raise error_type(f"百炼 {service_name} 请求失败（HTTP {exc.code}）：{body}") from exc

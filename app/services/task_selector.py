@@ -113,9 +113,10 @@ def recommend_trial_task(
             skill_scores[skill] += weight * pending_multiplier
 
     completed = {task_id for task_id in completed_task_ids if task_id in TASK_CATALOG}
-    available_ids = [task_id for task_id in TASK_CATALOG if task_id not in completed]
-    if not available_ids:
-        available_ids = list(TASK_CATALOG)
+    # Completed tasks remain available for deliberate re-validation. Prefer a
+    # not-yet-completed task when the evidence is otherwise equivalent, but do
+    # not remove a completed task from the candidate pool.
+    available_ids = list(TASK_CATALOG)
 
     ranked: list[tuple[str, float]] = []
     for task_id in available_ids:
@@ -136,6 +137,8 @@ def recommend_trial_task(
                     score += 1.5
                 if any(keyword in latest_evaluation.next_step.lower() for keyword in TASK_KEYWORDS[task_id]):
                     score += 2.5
+        if task_id in completed:
+            score -= 1.0
         ranked.append((task_id, round(score, 2)))
 
     order = {task_id: index for index, task_id in enumerate(TASK_CATALOG)}

@@ -66,6 +66,17 @@ class AuthStore:
                     revoked_at TEXT,
                     FOREIGN KEY(user_id) REFERENCES auth_users(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS auth_password_reset_codes (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    code_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    consumed_at TEXT,
+                    FOREIGN KEY(user_id) REFERENCES auth_users(id)
+                );
                 """
             )
             connection.execute(
@@ -73,6 +84,12 @@ class AuthStore:
             )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_auth_reset_user ON auth_password_reset_codes(user_id, created_at)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_auth_reset_expiry ON auth_password_reset_codes(expires_at)"
             )
 
     @staticmethod
@@ -208,6 +225,109 @@ class AuthStore:
                 raise ValueError("邮箱或密码不正确。")
             session = self._create_session(connection, str(row["id"]))
             return {"user": self._user_from_row(row), **session}
+
+    def create_password_reset_code(
+        self,
+        email: str,
+        *,
+        ttl_minutes: int = 10,
+    ) -> tuple[str, str] | None:
+        """Create a short-lived reset code without revealing account existence."""
+        normalized_email = self.normalize_email(email)
+        ttl = timedelta(minutes=max(1, int(ttl_minutes)))
+        now = self._now()
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT id, email FROM auth_users WHERE email = ?",
+                (normalized_email,),
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                """
+                UPDATE auth_password_reset_codes
+                SET consumed_at = COALESCE(consumed_at, ?)
+                WHERE user_id = ? AND consumed_at IS NULL
+                """,
+                (now.isoformat(), str(row["id"])),
+            )
+            connection.execute(
+                """
+                INSERT INTO auth_password_reset_codes
+                    (id, user_id, code_hash, created_at, expires_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    f"reset-{uuid4().hex}",
+                    str(row["id"]),
+                    self._hash_password(code),
+                    now.isoformat(),
+                    (now + ttl).isoformat(),
+                ),
+            )
+            return str(row["email"]), code
+
+    def reset_password(
+        self,
+        email: str,
+        code: str,
+        new_password: str,
+        *,
+        max_attempts: int = 5,
+    ) -> dict[str, object]:
+        normalized_email = self.normalize_email(email)
+        if len(new_password) < 8:
+            raise ValueError("密码至少需要 8 个字符。")
+        normalized_code = code.strip()
+        if len(normalized_code) != 6 or not normalized_code.isdigit():
+            raise ValueError("验证码不正确或已过期。")
+        now = self._now()
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT r.id AS reset_id, r.user_id, r.code_hash, r.expires_at, r.attempts,
+                       u.id, u.email, u.display_name
+                FROM auth_password_reset_codes AS r
+                JOIN auth_users AS u ON u.id = r.user_id
+                WHERE u.email = ? AND r.consumed_at IS NULL
+                ORDER BY r.created_at DESC LIMIT 1
+                """,
+                (normalized_email,),
+            ).fetchone()
+            invalid = row is None
+            if row is not None:
+                try:
+                    expired = datetime.fromisoformat(str(row["expires_at"])) <= now
+                except ValueError:
+                    expired = True
+                invalid = (
+                    expired
+                    or int(row["attempts"]) >= max_attempts
+                    or not self._verify_password(normalized_code, str(row["code_hash"]))
+                )
+                if invalid:
+                    connection.execute(
+                        "UPDATE auth_password_reset_codes SET attempts = attempts + 1 WHERE id = ?",
+                        (str(row["reset_id"]),),
+                    )
+            if invalid:
+                connection.commit()
+                raise ValueError("验证码不正确或已过期。")
+            user_id = str(row["user_id"])
+            connection.execute(
+                "UPDATE auth_users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                (self._hash_password(new_password), now.isoformat(), user_id),
+            )
+            connection.execute(
+                "UPDATE auth_password_reset_codes SET consumed_at = ? WHERE id = ?",
+                (now.isoformat(), str(row["reset_id"])),
+            )
+            connection.execute(
+                "UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+                (now.isoformat(), user_id),
+            )
+            return {"user": self._user_from_row(row)}
 
     def resolve_token(self, token: str | None) -> dict[str, str] | None:
         if not token or not token.strip():

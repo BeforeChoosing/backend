@@ -92,3 +92,30 @@ def test_controller_overrides_model_readiness_and_focus():
         "transfer",
         "evidence",
     }
+
+
+def test_controller_advances_star_turns_in_order_and_summarizes_on_fourth():
+    experience = "我在项目中负责访谈用户，后来根据反馈调整方案并完成上线。"
+    dimensions = []
+    for round_number in range(1, 5):
+        request = ProfileExplorationRequest(
+            experience_text=experience,
+            round_number=round_number,
+            star_history=dimensions,
+        )
+        assessment = assess_exploration(request)
+        dimensions.append(assessment.star_dimension)
+        assert assessment.star_dimension == ("S", "T", "A", "R")[round_number - 1]
+        assert assessment.next_action == ("ask" if round_number < 4 else "summarize")
+
+
+def test_controller_stop_intent_summarizes_without_answer_quality_gate():
+    request = ProfileExplorationRequest(
+        experience_text="我做过一个项目。",
+        messages=[{"role": "user", "content": "不知道了"}],
+    )
+
+    assessment = assess_exploration(request)
+
+    assert assessment.next_action == "summarize"
+    assert assessment.finalization_reason == "用户选择停止补充"

@@ -28,6 +28,24 @@ _DEFAULT_CHAT_URL = (
     "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 )
 _CHAT_URL = os.getenv("DASHSCOPE_BASE_URL", _DEFAULT_CHAT_URL)
+_DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS = 180
+
+_DEFAULT_TEXT_FAST_MODELS = (
+    "qwen3-8b,qwen3-14b,qwen-flash,qwen-flash-2025-07-28,qwen3.6-flash,"
+    "qwen3.5-flash,qwen3.6-flash-2026-04-16,qwen3.7-flash,qwen3.8-flash"
+)
+_DEFAULT_TEXT_BALANCED_MODELS = (
+    "qwen3.5-27b,qwen3.6-27b,qwen3.8-27b,qwen3.6-plus,qwen3.7-plus,"
+    "qwen3.5-plus-2026-04-20,qwen-plus-1220,qwen3.5-plus-2026-02-15,"
+    "qwen-plus-latest,qwen-plus-2025-09-11,qwen3.7-plus-2026-05-26,"
+    "qwen-plus-2025-01-25,qwen-plus-2025-04-28,qwen3.5-plus,"
+    "qwen-plus-2025-07-14,qwen3.6-plus-2026-04-02"
+)
+_DEFAULT_TEXT_REASONING_MODELS = (
+    "qwen-max,qwen3-max,qwen3-max-2026-01-23,qwen3.7-max,"
+    "qwen3.7-max-2026-06-08,qwen3.7-max-preview,qwen3.7-max-2026-05-17,"
+    "qwen3.8-max"
+)
 
 
 @dataclass(frozen=True)
@@ -36,7 +54,17 @@ class Settings:
     api_prefix: str = "/api/v1"
     dashscope_api_key: str = os.getenv("DASHSCOPE_API_KEY", "")
     dashscope_base_url: str = _CHAT_URL
-    qwen_model: str = os.getenv("QWEN_MODEL", "qwen-plus")
+    qwen_model: str = os.getenv("QWEN_MODEL", "qwen3.6-plus")
+    qwen_fast_model: str = os.getenv("QWEN_FAST_MODEL", "qwen3.6-flash")
+    qwen_fast_models: tuple[str, ...] = _csv(
+        _env_or_default("QWEN_FAST_MODELS", _DEFAULT_TEXT_FAST_MODELS)
+    )
+    qwen_balanced_models: tuple[str, ...] = _csv(
+        _env_or_default("QWEN_BALANCED_MODELS", _DEFAULT_TEXT_BALANCED_MODELS)
+    )
+    qwen_reasoning_models: tuple[str, ...] = _csv(
+        _env_or_default("QWEN_REASONING_MODELS", _DEFAULT_TEXT_REASONING_MODELS)
+    )
     trial_base_model: str = os.getenv("TRIAL_BASE_MODEL", "")
     trial_sft_model: str = os.getenv("TRIAL_SFT_MODEL", "")
     trial_verifier_model: str = os.getenv("TRIAL_VERIFIER_MODEL", "")
@@ -54,8 +82,44 @@ class Settings:
         os.getenv("TRIAL_VERIFIER_MIN_EVIDENCE_COVERAGE", "0.75")
     )
     bailian_vision_model: str = os.getenv("BAILIAN_VISION_MODEL", "qwen-vl-ocr")
+    ocr_fast_models: tuple[str, ...] = _csv(
+        _env_or_default("OCR_FAST_MODELS", "qwen3-vl-flash-2026-01-22")
+    )
+    ocr_specialist_models: tuple[str, ...] = _csv(
+        _env_or_default("OCR_SPECIALIST_MODELS", "qwen3.5-ocr,qwen-vl-ocr-2025-11-20")
+    )
+    vision_general_models: tuple[str, ...] = _csv(
+        _env_or_default(
+            "VISION_GENERAL_MODELS",
+            "qwen3-vl-plus,qwen3-vl-32b-instruct,qwen3-vl-235b-a22b-instruct",
+        )
+    )
+    vision_reasoning_models: tuple[str, ...] = _csv(
+        _env_or_default("VISION_REASONING_MODELS", "qwen3-vl-235b-a22b-thinking")
+    )
     multimodal_max_pages: int = int(os.getenv("MULTIMODAL_MAX_PAGES", "8"))
-    request_timeout_seconds: float = float(os.getenv("LLM_REQUEST_TIMEOUT", "45"))
+    # qwen3.6-plus can legitimately take around 90s for structured profile
+    # proposals; keep enough headroom for the upstream response before
+    # returning a 504 to the client.
+    request_timeout_seconds: float = float(
+        os.getenv("LLM_REQUEST_TIMEOUT", str(_DEFAULT_LLM_REQUEST_TIMEOUT_SECONDS))
+    )
+    # Global process-wide guard for all text, vision and retrieval model calls.
+    # The queue is FIFO, so requests above these limits wait instead of being
+    # rejected or asking the user to retry.
+    llm_max_concurrency: int = int(os.getenv("LLM_MAX_CONCURRENCY", "6"))
+    llm_model_max_concurrency: int = int(
+        os.getenv("LLM_MODEL_MAX_CONCURRENCY", "1")
+    )
+    llm_model_failure_threshold: int = int(
+        os.getenv("LLM_MODEL_FAILURE_THRESHOLD", "2")
+    )
+    llm_model_cooldown_seconds: float = float(
+        os.getenv("LLM_MODEL_COOLDOWN_SECONDS", "60")
+    )
+    llm_max_requests_per_minute: int = int(
+        os.getenv("LLM_MAX_REQUESTS_PER_MINUTE", "60")
+    )
     profile_db_path: str = os.getenv("PROFILE_DB_PATH", "profile.db")
     auth_session_ttl_hours: int = int(os.getenv("AUTH_SESSION_TTL_HOURS", str(24 * 30)))
     knowledge_dir: str = os.getenv("KNOWLEDGE_DIR", "knowledge/public")

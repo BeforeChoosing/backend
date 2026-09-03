@@ -151,6 +151,27 @@ class TrialScoringService:
                 answer.event_response,
             )
             event_refs.append("event:response")
+        else:
+            # The final workbench step now contains the decision and rationale
+            # in one answer field. Keep that response in the event evidence
+            # lane so the dynamic-adjustment rubric still sees it without
+            # requiring a second decision form.
+            final_step = task.steps[-1] if task.steps else None
+            final_step_answer = (
+                answer.step_answers.get(final_step.id, "").strip()
+                if final_step is not None
+                else ""
+            )
+            if final_step_answer:
+                add_item(
+                    "event:response",
+                    "event",
+                    final_step.id,
+                    "deliverable",
+                    "事件后重新决策",
+                    final_step_answer,
+                )
+                event_refs.append("event:response")
 
         for index, usage in enumerate(answer.coach_usage, start=1):
             add_item(

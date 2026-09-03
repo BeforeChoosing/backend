@@ -33,7 +33,7 @@ from app.schemas.task_catalog import (
     TrialTaskRecommendation,
     TrialTaskRecommendationRequest,
 )
-from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError
+from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError, llm_error_status
 from app.services.audit_log import record_business_event
 from app.services.ability_matching import evaluate_card_play_round
 from app.services.dynamic_trial_store import DynamicTrialStore
@@ -286,7 +286,7 @@ async def submit_dynamic_trial_session(session_id: str) -> DynamicTrialSession:
             return submitted
         except LLMGatewayError as exc:
             logger.warning("dynamic trial evaluation failed session_id=%s reason=%s", session_id, exc)
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            raise HTTPException(status_code=llm_error_status(exc), detail=str(exc)) from exc
         except ValueError as exc:
             logger.warning("dynamic trial evaluation invalid session_id=%s reason=%s", session_id, exc)
             raise HTTPException(status_code=502, detail="Qwen 评价未通过结构化校验，请稍后重试。") from exc
@@ -466,8 +466,6 @@ def _validate_dynamic_answer(task_id: str, answer: DynamicTrialAnswer, *, event_
         raise HTTPException(status_code=422, detail=f"请先完成：{'、'.join(missing)}。")
     if not event_revealed:
         raise HTTPException(status_code=422, detail="请先接收中途事件并完成重新决策。")
-    if answer.event_decision is None or not answer.event_response.strip():
-        raise HTTPException(status_code=422, detail="请填写中途事件后的维持或调整决定及依据。")
 
 
 def _normalize_card_play(
@@ -768,7 +766,7 @@ async def submit_trial_session(session_id: str) -> TrialSession:
             return submitted
         except LLMGatewayError as exc:
             logger.warning("trial evaluation failed session_id=%s reason=%s", session_id, exc)
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            raise HTTPException(status_code=llm_error_status(exc), detail=str(exc)) from exc
         except ValueError as exc:
             logger.warning("trial evaluation invalid session_id=%s reason=%s", session_id, exc)
             raise HTTPException(status_code=502, detail="Qwen 评价未通过结构化校验，请稍后重试。") from exc

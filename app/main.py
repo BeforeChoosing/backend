@@ -4,11 +4,16 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException
+
+from app.api.errors import error_response, http_error_handler, validation_error_handler
+from app.services.runtime_log import log_event
 
 from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
 from app.api.health import router as health_router
+from app.api.llm_queue import router as llm_queue_router
 from app.api.career import router as career_router
 from app.api.profile import router as profile_router
 from app.api.trial import router as trial_router
@@ -23,6 +28,8 @@ from app.services.request_context import (
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.1.0")
+app.add_exception_handler(HTTPException, http_error_handler)
+app.add_exception_handler(RequestValidationError, validation_error_handler)
 
 
 @app.middleware("http")
@@ -34,6 +41,8 @@ async def audit_formal_mode_requests(request: Request, call_next):
     is_api = path == settings.api_prefix or path.startswith(settings.api_prefix + "/")
     public_auth = request.method == "POST" and path in {
         f"{settings.api_prefix}/auth/login", f"{settings.api_prefix}/auth/register",
+        f"{settings.api_prefix}/auth/password-reset/request",
+        f"{settings.api_prefix}/auth/password-reset/confirm",
     }
     public_read = request.method in {"GET", "HEAD"} and (
         path == f"{settings.api_prefix}/health"
@@ -47,20 +56,24 @@ async def audit_formal_mode_requests(request: Request, call_next):
     # cannot disable either authentication or audit logging.
     if requires_auth or public_auth:
         app_mode = "use"
-    request_id = request.headers.get("X-Client-Request-Id", "").strip() or uuid4().hex
+    # The server owns the trace ID; client-supplied IDs are only correlation hints.
+    request_id = uuid4().hex
+    client_request_id = request.headers.get("X-Client-Request-Id", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", client_request_id):
+        client_request_id = ""
     response = None
     status_code = 500
     authenticated_user = None
-    if request.method != "OPTIONS":
-        if requires_auth:
+    context = RequestContext(app_mode=app_mode, request_id=request_id)
+    token = set_request_context(context)
+    started = time.perf_counter()
+    try:
+        if request.method != "OPTIONS" and requires_auth:
             authorization = request.headers.get("Authorization", "")
             scheme, _, raw_token = authorization.partition(" ")
             if scheme.lower() != "bearer" or not raw_token.strip():
                 status_code = 401
-                response = JSONResponse(
-                    status_code=401,
-                    content={"detail": "正式模式需要先登录。"},
-                )
+                response = error_response(401, "正式模式需要先登录。")
             else:
                 authenticated_user = AuthStore(
                     settings.profile_db_path,
@@ -68,23 +81,22 @@ async def audit_formal_mode_requests(request: Request, call_next):
                 ).resolve_token(raw_token)
                 if authenticated_user is None:
                     status_code = 401
-                    response = JSONResponse(
-                        status_code=401,
-                        content={"detail": "登录已失效，请重新登录。"},
-                    )
-    context = RequestContext(
-        app_mode=app_mode,
-        request_id=request_id,
-        user_id=str(authenticated_user["id"]) if authenticated_user else "",
-        user_email=str(authenticated_user["email"]) if authenticated_user else "",
-        user_name=str(authenticated_user["display_name"]) if authenticated_user else "",
-    )
-    token = set_request_context(context)
-    started = time.perf_counter()
-    try:
+                    response = error_response(401, "登录已失效，请重新登录。")
+        context = RequestContext(
+            app_mode=app_mode, request_id=request_id,
+            user_id=str(authenticated_user["id"]) if authenticated_user else "",
+            user_email=str(authenticated_user["email"]) if authenticated_user else "",
+            user_name=str(authenticated_user["display_name"]) if authenticated_user else "",
+        )
+        set_request_context(context)
         if response is None:
             response = await call_next(request)
             status_code = response.status_code
+        return response
+    except Exception as exc:
+        log_event('request_failed', level='error', error=exc, alert=True, status_code=500,
+                  error_code='INTERNAL_ERROR')
+        response = error_response(500)
         return response
     finally:
         duration_ms = (time.perf_counter() - started) * 1000
@@ -104,10 +116,16 @@ async def audit_formal_mode_requests(request: Request, call_next):
                     path=request.url.path,
                     status_code=status_code,
                     duration_ms=duration_ms,
-                    metadata={"query": request.url.query[:400]},
+                    metadata={"client_request_id": client_request_id},
                 )
-            except Exception:  # noqa: BLE001 - audit must never break the product
-                pass
+            except Exception as exc:  # Audit failure must be visible to operators.
+                log_event('audit_write_failed', level='error', error=exc, alert=True)
+        if is_api and request.method != 'OPTIONS':
+            route = request.scope.get('route')
+            log_event('http_request', level='error' if status_code >= 500 else ('warn' if status_code >= 400 else 'info'),
+                      method=request.method, route=getattr(route, 'path', 'unmatched'),
+                      status_code=status_code, duration_ms=round(duration_ms, 2),
+                      client_request_id=client_request_id)
         reset_request_context(token)
         if response is not None:
             response.headers["X-Request-Id"] = request_id
@@ -122,6 +140,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["X-Request-Id", "Retry-After"],
 )
 
 
@@ -131,6 +150,7 @@ app.include_router(profile_router, prefix=settings.api_prefix)
 app.include_router(career_router, prefix=settings.api_prefix)
 app.include_router(trial_router, prefix=settings.api_prefix)
 app.include_router(audit_router, prefix=settings.api_prefix)
+app.include_router(llm_queue_router, prefix=settings.api_prefix)
 
 
 @app.get("/")

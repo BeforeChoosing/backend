@@ -51,6 +51,58 @@ def test_auth_store_rejects_duplicate_and_bad_password(tmp_path: Path) -> None:
         raise AssertionError("bad password should be rejected")
 
 
+def test_auth_store_password_reset_revokes_sessions(tmp_path: Path) -> None:
+    store = AuthStore(tmp_path / "profile.db")
+    registered = store.register("reset@example.com", "password-123")
+    reset = store.create_password_reset_code("RESET@example.com")
+    assert reset is not None
+    email, code = reset
+    assert email == "reset@example.com"
+    store.reset_password(email, code, "new-password-456")
+    assert store.resolve_token(str(registered["access_token"])) is None
+    assert store.login(email, "new-password-456")["user"]["email"] == email
+    try:
+        store.reset_password(email, code, "another-password")
+    except ValueError as exc:
+        assert "验证码" in str(exc)
+    else:
+        raise AssertionError("a reset code must be single-use")
+
+
+def test_password_reset_api_does_not_enumerate_accounts(tmp_path: Path, monkeypatch) -> None:
+    settings: Settings = replace(main_module.settings, profile_db_path=str(tmp_path / "profile.db"))
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(auth_api, "get_settings", lambda: settings)
+    monkeypatch.setattr(auth_api, "send_password_reset_email", lambda recipient, code: True)
+    auth_api._reset_cooldowns.clear()
+    client = TestClient(main_module.app)
+    client.post("/api/v1/auth/register", json={"email": "known@example.com", "password": "password-123"})
+    known = client.post("/api/v1/auth/password-reset/request", json={"email": "known@example.com"})
+    auth_api._reset_cooldowns.clear()
+    unknown = client.post("/api/v1/auth/password-reset/request", json={"email": "unknown@example.com"})
+    assert known.status_code == unknown.status_code == 202
+    assert known.json() == unknown.json()
+
+
+def test_register_api_rejects_existing_email_case_insensitively(tmp_path: Path, monkeypatch) -> None:
+    settings: Settings = replace(main_module.settings, profile_db_path=str(tmp_path / "profile.db"))
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(auth_api, "get_settings", lambda: settings)
+    client = TestClient(main_module.app)
+    first = client.post(
+        "/api/v1/auth/register",
+        json={"email": "Duplicate@Example.com", "password": "password-123"},
+    )
+    assert first.status_code == 201
+
+    duplicate = client.post(
+        "/api/v1/auth/register",
+        json={"email": "duplicate@example.com", "password": "password-456"},
+    )
+    assert duplicate.status_code == 409
+    assert "已经注册" in duplicate.json()["detail"]
+
+
 def test_formal_business_events_and_conversations_are_user_bound(tmp_path: Path) -> None:
     db_path = tmp_path / "profile.db"
     token = set_request_context(
