@@ -107,7 +107,7 @@ class Settings:
     # Global process-wide guard for all text, vision and retrieval model calls.
     # The queue is FIFO, so requests above these limits wait instead of being
     # rejected or asking the user to retry.
-    llm_max_concurrency: int = int(os.getenv("LLM_MAX_CONCURRENCY", "6"))
+    llm_max_concurrency: int = int(os.getenv("LLM_MAX_CONCURRENCY", "12"))
     llm_model_max_concurrency: int = int(
         os.getenv("LLM_MODEL_MAX_CONCURRENCY", "1")
     )
@@ -118,7 +118,7 @@ class Settings:
         os.getenv("LLM_MODEL_COOLDOWN_SECONDS", "60")
     )
     llm_max_requests_per_minute: int = int(
-        os.getenv("LLM_MAX_REQUESTS_PER_MINUTE", "60")
+        os.getenv("LLM_MAX_REQUESTS_PER_MINUTE", "180")
     )
     profile_db_path: str = os.getenv("PROFILE_DB_PATH", "profile.db")
     auth_session_ttl_hours: int = int(os.getenv("AUTH_SESSION_TTL_HOURS", str(24 * 30)))

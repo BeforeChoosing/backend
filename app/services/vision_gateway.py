@@ -95,9 +95,9 @@ class DashScopeVisionGateway:
         remaining_models = list(self.model_health.available(selection.candidates))
         context = get_request_context()
         queue = get_llm_request_queue(
-            max_concurrency=getattr(self.settings, "llm_max_concurrency", 6),
+            max_concurrency=getattr(self.settings, "llm_max_concurrency", 12),
             max_requests_per_minute=getattr(
-                self.settings, "llm_max_requests_per_minute", 60
+                self.settings, "llm_max_requests_per_minute", 180
             ),
             model_max_concurrency=getattr(
                 self.settings, "llm_model_max_concurrency", 1
