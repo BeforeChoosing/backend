@@ -158,6 +158,27 @@ class _FakeMaterialUnderstandingAgent:
         )
 
 
+class _FakeProfileProposalAgent:
+    def __init__(self):
+        self.calls = 0
+
+    async def propose(self, request, trace_id):
+        self.calls += 1
+        payload = _card_payload()
+        payload["id"] = f"proposal-{self.calls}"
+        return profile_api.ProfileProposalResponse(
+            trace_id=trace_id,
+            experience={
+                "title": "校园项目",
+                "actions": ["访谈用户", "整理需求"],
+                "result": "完成原型验证。",
+                "source_refs": ["input:experience_text"],
+            },
+            card_proposals=[payload],
+            next_question="可以继续补充这段经历。",
+        )
+
+
 def test_material_understanding_returns_selectable_experiences_and_caches_result(
     tmp_path, monkeypatch, authenticated_client
 ):
@@ -203,6 +224,32 @@ def test_profile_exploration_reuses_identical_model_result(tmp_path, monkeypatch
     assert first.json()["model"] == second.json()["model"] == "qwen-test"
     assert first.json()["reply"] == second.json()["reply"]
     assert agent.calls == 1
+
+
+def test_profile_proposal_only_reuses_exactly_identical_context(
+    tmp_path, monkeypatch, authenticated_client
+):
+    store = ProfileStore(tmp_path / "profile.db")
+    agent = _FakeProfileProposalAgent()
+    monkeypatch.setattr(profile_api, "_profile_store", lambda: store)
+    monkeypatch.setattr(profile_api, "_profile_agent", lambda: agent)
+    base = {
+        "experience_text": "我负责访谈用户并整理需求。",
+        "target_role": "AI 产品经理",
+        "existing_card_titles": ["用户洞察能力"],
+    }
+
+    first = authenticated_client.post("/api/v1/profile/proposals", json=base)
+    identical = authenticated_client.post("/api/v1/profile/proposals", json=base)
+    changed = authenticated_client.post(
+        "/api/v1/profile/proposals",
+        json={**base, "experience_text": "我负责访谈用户并根据反馈缩小了首版范围。"},
+    )
+
+    assert first.status_code == identical.status_code == changed.status_code == 200
+    assert first.json()["trace_id"] == identical.json()["trace_id"]
+    assert changed.json()["trace_id"] != first.json()["trace_id"]
+    assert agent.calls == 2
 
 
 def test_profile_exploration_server_owns_focus_and_readiness(tmp_path, monkeypatch, authenticated_client):
