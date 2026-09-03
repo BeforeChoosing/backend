@@ -220,6 +220,11 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
         "/api/v1/trial/workbench/sessions",
         json={"task_id": "F-01"},
     )
+    assert len(created.json()["answer"]["pending_abilities"]) == 3
+    assert all(
+        item["status"] == "pending" and item["title"].endswith("能力")
+        for item in created.json()["answer"]["pending_abilities"]
+    )
     session_id = created.json()["id"]
     coach = client.post(
         f"/api/v1/trial/workbench/sessions/{session_id}/coach",

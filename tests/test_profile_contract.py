@@ -41,9 +41,18 @@ def test_profile_agent_returns_pending_cards():
         ProfileProposalRequest(experience_text="我在校园项目中访谈用户并根据反馈调整了方案，最后完成了可用原型。"),
         "trace-test-1234",
     ))
-    assert response.card_proposals[0].title == "用户研究"
+    assert response.card_proposals[0].title == "用户研究能力"
     assert response.card_proposals[0].pending_verification is True
     assert response.card_proposals[0].source_refs == ["input:experience_text"]
+
+
+def test_profile_agent_rejects_an_overlong_card_title_for_model_failover():
+    try:
+        ProfileAgent._normalize_card_title("这是一个非常冗长且不规范的完整句子")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("过长标题应触发模型切换")
 
 
 def test_profile_requests_accept_any_non_empty_user_input():

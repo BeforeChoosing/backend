@@ -28,6 +28,7 @@ from app.schemas.task_catalog import (
     DynamicTrialCoachRequest,
     DynamicTrialCoachResponse,
     DynamicTrialCoachUsage,
+    DynamicTrialPendingAbility,
     DynamicTrialSession,
     DynamicTrialSessionCreateRequest,
     TrialTaskDefinition,
@@ -165,8 +166,36 @@ def create_trial_recommendation(
 def create_dynamic_trial_session(
     request: DynamicTrialSessionCreateRequest,
 ) -> DynamicTrialSession:
-    get_task_definition(request.task_id)
-    session = _dynamic_trial_store().create_session(request.task_id)
+    task = get_task_definition(request.task_id)
+    title_by_skill = {
+        "用户洞察": "用户洞察能力",
+        "数据驱动": "数据驱动判断能力",
+        "模型评测": "模型评测能力",
+        "商业意识": "商业判断能力",
+        "方案与交互": "方案设计能力",
+        "AI产品化": "AI场景判断能力",
+        "优先级判断": "优先级判断能力",
+        "跨团队落地": "跨团队协作能力",
+        "创新趋势": "AI趋势判断能力",
+    }
+    pending_abilities = [
+        DynamicTrialPendingAbility(
+            id=f"pending:{challenge.id}:{index + 1}",
+            challenge_id=challenge.id,
+            title=title_by_skill.get(skill, f"{skill}能力"),
+            description=(
+                f"当前画像中还没有足够证据证明这项能力。"
+                f"本轮将结合任务表现验证：{challenge.reference_behavior}"
+            )[:300],
+            target_skills=[skill],
+        )
+        for challenge in task.ability_challenges
+        for index, skill in enumerate(challenge.target_skills[:1])
+    ]
+    session = _dynamic_trial_store().create_session(
+        request.task_id,
+        DynamicTrialAnswer(pending_abilities=pending_abilities),
+    )
     _record_trial_event(
         "trial.session.create",
         {"session_id": session.id, "task_id": session.task_id},
@@ -187,6 +216,9 @@ def save_dynamic_trial_answer(
     try:
         session = _get_dynamic_session(session_id)
         profile_store = _profile_store()
+        # Pending abilities are generated from the immutable task definition.
+        # Never let a client invent or rewrite them when saving an answer.
+        request.answer.pending_abilities = session.answer.pending_abilities
         _normalize_card_play(session.task_id, request.answer, profile_store)
         if request.answer.card_play_completed:
             _validate_card_play(session.task_id, request.answer, profile_store)
@@ -567,14 +599,21 @@ def _normalize_card_play(
         selected_ids = list(dict.fromkeys(item.selected_card_ids))
         if len(selected_ids) != len(item.selected_card_ids):
             raise HTTPException(status_code=422, detail="同一挑战不能重复选择能力卡。")
-        cards = profile_store.get_cards_by_ids(selected_ids)
-        if len(cards) != len(selected_ids):
-            raise HTTPException(status_code=422, detail="能力出牌只能使用已确认的能力卡。")
+        pending_by_id = {
+            ability.id: ability
+            for ability in answer.pending_abilities
+            if ability.challenge_id == challenge.id
+        }
+        selected_pending = [pending_by_id[item_id] for item_id in selected_ids if item_id in pending_by_id]
+        confirmed_ids = [item_id for item_id in selected_ids if item_id not in pending_by_id]
+        cards = profile_store.get_cards_by_ids(confirmed_ids)
+        if len(cards) != len(confirmed_ids) or len(confirmed_ids) + len(selected_pending) != len(selected_ids):
+            raise HTTPException(status_code=422, detail="能力出牌包含无效或不属于当前挑战的能力卡。")
         cards_by_id = {card.id: card for card in cards}
-        ordered_cards = [cards_by_id[card_id] for card_id in selected_ids]
+        ordered_cards = [cards_by_id[card_id] for card_id in confirmed_ids]
         try:
             normalized_rounds.append(
-                evaluate_card_play_round(challenge, ordered_cards)
+                evaluate_card_play_round(challenge, ordered_cards, selected_pending)
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -602,10 +641,10 @@ def _validate_card_play(
             raise HTTPException(status_code=422, detail="请先完成全部三个能力应用挑战。")
         if any(item.match_level is None or not item.feedback for item in answer.card_play_rounds):
             raise HTTPException(status_code=422, detail="能力应用挑战缺少匹配反馈。")
-        if len(profile_store.get_cards_by_ids(answer.selected_card_ids)) != len(
-            answer.selected_card_ids
-        ):
-            raise HTTPException(status_code=422, detail="能力出牌只能使用已确认的能力卡。")
+        pending_ids = {ability.id for ability in answer.pending_abilities}
+        confirmed_ids = [item_id for item_id in answer.selected_card_ids if item_id not in pending_ids]
+        if len(profile_store.get_cards_by_ids(confirmed_ids)) != len(confirmed_ids):
+            raise HTTPException(status_code=422, detail="能力出牌包含无效能力卡。")
         return
 
     selected_ids = list(dict.fromkeys(answer.selected_card_ids))

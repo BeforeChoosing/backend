@@ -112,6 +112,20 @@ class ProfileAgent:
     def __init__(self, gateway: DashScopeQwenGateway):
         self.gateway = gateway
 
+    @staticmethod
+    def _normalize_card_title(value: object) -> str:
+        """Keep user-facing card names short, editable and consistently named."""
+
+        title = "".join(str(value or "").strip().split())
+        title = title.strip("，。；：、,.!?！？-_")
+        if not title:
+            raise ValueError("Qwen 未返回能力卡标题")
+        base = title[:-2] if title.endswith("能力") else title
+        base = base.strip("，。；：、,.!?！？-_")
+        if not base or len(base) > 8:
+            raise ValueError("能力卡标题必须为不超过 10 个汉字的 XXXX能力")
+        return f"{base}能力"
+
     async def understand_material(
         self, request: MaterialUnderstandingRequest, trace_id: str
     ) -> MaterialUnderstandingResponse:
@@ -371,7 +385,7 @@ class ProfileAgent:
                 category = category_defaults[index % len(category_defaults)]
             color_tone, default_icon = color_by_category[category]
             evidence_quote = str(item.get("evidence_quote") or "用户自述，待进一步核验")[:500]
-            title = str(item.get("title") or f"待确认能力 {index + 1}")[:80]
+            title = ProfileAgent._normalize_card_title(item.get("title"))
             claim_level = str(item.get("claim_level") or "interpretation")
             if claim_level not in allowed_claim_levels:
                 claim_level = "interpretation"

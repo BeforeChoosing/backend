@@ -84,6 +84,7 @@ class ProfileConversationSnapshotMessage(BaseModel):
     detected_signals: list[str] = Field(default_factory=list, max_length=5)
     model: str | None = Field(default=None, max_length=120)
     cache_hit: bool | None = None
+    star_dimension: StarDimension | None = None
 
 
 class ProfileConversationMaterial(BaseModel):

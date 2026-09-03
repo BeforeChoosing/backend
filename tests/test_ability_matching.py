@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from app.schemas.profile import ProfileCard
+from app.schemas.task_catalog import DynamicTrialPendingAbility
 from app.services.ability_matching import evaluate_card_play_round
 from app.tasks.catalog import TASK_CATALOG, get_task_definition
 
@@ -50,3 +51,21 @@ def test_card_play_match_has_high_partial_and_low_results() -> None:
     assert partial.matched_card_ids == ["data"]
     assert low.match_level == "low"
     assert low.matched_card_ids == []
+
+
+def test_pending_ability_can_fill_a_real_profile_gap() -> None:
+    challenge = get_task_definition("F-01").ability_challenges[0]
+    pending = DynamicTrialPendingAbility(
+        id=f"pending:{challenge.id}:1",
+        challenge_id=challenge.id,
+        title="用户洞察能力",
+        description="当前画像中尚无足够证据，本轮通过任务验证。",
+        target_skills=challenge.target_skills[:1],
+    )
+
+    result = evaluate_card_play_round(challenge, [], [pending])
+
+    assert result.match_level == "partial"
+    assert result.selected_card_ids == [pending.id]
+    assert result.matched_card_ids == [pending.id]
+    assert "待验证能力" in result.feedback

@@ -29,6 +29,7 @@ class TrialScoringService:
         items: list[TrialEvidenceItem] = []
         seen_ids: set[str] = set()
         cards_by_id = {card.id: card for card in cards}
+        pending_by_id = {ability.id: ability for ability in answer.pending_abilities}
         selected_ids = list(dict.fromkeys(answer.selected_card_ids))
         challenges_by_id = {challenge.id: challenge for challenge in task.ability_challenges}
         materials_by_id = {material.id: material for material in task.materials}
@@ -57,16 +58,26 @@ class TrialScoringService:
 
         for card_id in selected_ids:
             card = cards_by_id.get(card_id)
-            if card is None:
+            if card is not None:
+                add_item(
+                    f"card:{card.id}",
+                    "ability_card",
+                    card.id,
+                    "planned",
+                    "选择的能力卡",
+                    f"{card.title}：{card.description}",
+                )
                 continue
-            add_item(
-                f"card:{card.id}",
-                "ability_card",
-                card.id,
-                "planned",
-                "选择的能力卡",
-                f"{card.title}：{card.description}",
-            )
+            pending = pending_by_id.get(card_id)
+            if pending is not None:
+                add_item(
+                    f"pending_ability:{pending.id}",
+                    "ability_card",
+                    pending.id,
+                    "planned",
+                    "待验证能力",
+                    f"{pending.title}：{pending.description}",
+                )
 
         for round_item in answer.card_play_rounds:
             challenge = challenges_by_id.get(round_item.challenge_id)
@@ -74,7 +85,8 @@ class TrialScoringService:
                 continue
             for card_id in round_item.selected_card_ids:
                 card = cards_by_id.get(card_id)
-                if card is None:
+                pending = pending_by_id.get(card_id)
+                if card is None and pending is None:
                     continue
                 match_level = round_item.match_level or "未评价"
                 add_item(
@@ -83,7 +95,7 @@ class TrialScoringService:
                     round_item.challenge_id,
                     "planned",
                     f"{challenge.title} · 能力应用",
-                    f"选择「{card.title}」，本轮匹配结果为{match_level}。{round_item.feedback}",
+                    f"选择「{card.title if card is not None else pending.title}」，本轮匹配结果为{match_level}。{round_item.feedback}",
                 )
 
         step_answer_refs: list[str] = []
@@ -199,7 +211,8 @@ class TrialScoringService:
         ability_applications: list[TrialAbilityApplication] = []
         for card_id in selected_ids:
             card = cards_by_id.get(card_id)
-            if card is None:
+            pending = pending_by_id.get(card_id)
+            if card is None and pending is None:
                 continue
             card_play_refs = card_play_refs_by_card[card_id]
             challenge_ids = list(dict.fromkeys(challenge_ids_by_card[card_id]))
@@ -221,7 +234,7 @@ class TrialScoringService:
                 )
             application_refs = list(
                 dict.fromkeys(
-                    [f"card:{card_id}", *card_play_refs, *step_answer_refs[:3], *event_refs[:1]]
+                    [f"card:{card_id}" if card is not None else f"pending_ability:{card_id}", *card_play_refs, *step_answer_refs[:3], *event_refs[:1]]
                 )
             )[:8]
             next_step = {
@@ -231,8 +244,8 @@ class TrialScoringService:
             }[status]
             ability_applications.append(
                 TrialAbilityApplication(
-                    card_id=card.id,
-                    card_title=card.title,
+                    card_id=card.id if card is not None else pending.id,
+                    card_title=card.title if card is not None else pending.title,
                     challenge_ids=challenge_ids,
                     evidence_refs=application_refs,
                     status=status,  # type: ignore[arg-type]
@@ -241,7 +254,11 @@ class TrialScoringService:
                 )
             )
 
-        card_refs = [f"card:{card_id}" for card_id in selected_ids if card_id in cards_by_id]
+        card_refs = [
+            f"card:{card_id}" if card_id in cards_by_id else f"pending_ability:{card_id}"
+            for card_id in selected_ids
+            if card_id in cards_by_id or card_id in pending_by_id
+        ]
         card_play_refs = [item.id for item in items if item.source == "card_play"]
         summary_refs = list(
             dict.fromkeys(
@@ -251,7 +268,7 @@ class TrialScoringService:
         return TrialEvidenceBundle(
             items=items,
             evidence_refs=summary_refs,
-            selected_card_ids=[card_id for card_id in selected_ids if card_id in cards_by_id],
+            selected_card_ids=[card_id for card_id in selected_ids if card_id in cards_by_id or card_id in pending_by_id],
             ability_applications=ability_applications,
         )
 
