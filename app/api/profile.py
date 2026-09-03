@@ -663,6 +663,20 @@ def delete_profile_card(card_id: str) -> ProfileCardsResponse:
 async def create_profile_proposal(
     request: ProfileProposalRequest,
 ) -> ProfileProposalResponse:
+    existing_cards = _profile_store().get_profile().cards
+    request = ProfileProposalRequest.model_validate({
+        **request.model_dump(mode="json"),
+        "existing_card_titles": [card.title for card in existing_cards],
+        "existing_cards": [
+            {
+                "id": card.id,
+                "title": card.title,
+                "category": card.category,
+                "description": card.description,
+            }
+            for card in existing_cards
+        ],
+    })
     cache_key = ModelResponseCache.fingerprint(
         {
             "prompt_version": ProfileAgent.PROMPT_VERSION,

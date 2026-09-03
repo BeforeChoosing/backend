@@ -167,6 +167,7 @@ def create_dynamic_trial_session(
     request: DynamicTrialSessionCreateRequest,
 ) -> DynamicTrialSession:
     task = get_task_definition(request.task_id)
+    confirmed_cards = _profile_store().get_profile().cards
     title_by_skill = {
         "用户洞察": "用户洞察能力",
         "数据驱动": "数据驱动判断能力",
@@ -178,6 +179,23 @@ def create_dynamic_trial_session(
         "跨团队落地": "跨团队协作能力",
         "创新趋势": "AI趋势判断能力",
     }
+    category_by_skill = {
+        "用户洞察": "洞察分析",
+        "数据驱动": "数据驱动",
+        "方案与交互": "产品策略",
+        "AI产品化": "技术落地",
+        "跨团队落地": "协作沟通",
+    }
+
+    def has_confirmed_evidence(skill: str) -> bool:
+        expected_title = title_by_skill.get(skill, f"{skill}能力")
+        return any(
+            skill in card.title
+            or card.title in expected_title
+            or card.category == category_by_skill.get(skill)
+            for card in confirmed_cards
+        )
+
     pending_abilities = [
         DynamicTrialPendingAbility(
             id=f"pending:{challenge.id}:{index + 1}",
@@ -191,7 +209,8 @@ def create_dynamic_trial_session(
         )
         for challenge in task.ability_challenges
         for index, skill in enumerate(challenge.target_skills[:1])
-    ]
+        if not has_confirmed_evidence(skill)
+    ][:3]
     session = _dynamic_trial_store().create_session(
         request.task_id,
         DynamicTrialAnswer(pending_abilities=pending_abilities),

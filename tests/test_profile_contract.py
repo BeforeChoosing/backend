@@ -38,12 +38,17 @@ class FakeGateway:
 
 def test_profile_agent_returns_pending_cards():
     response = asyncio.run(ProfileAgent(FakeGateway()).propose(
-        ProfileProposalRequest(experience_text="我在校园项目中访谈用户并根据反馈调整了方案，最后完成了可用原型。"),
+        ProfileProposalRequest(
+            experience_text="我在校园项目中访谈用户并根据反馈调整了方案，最后完成了可用原型。",
+            experience_id="conversation-1",
+        ),
         "trace-test-1234",
     ))
     assert response.card_proposals[0].title == "用户研究能力"
     assert response.card_proposals[0].pending_verification is True
-    assert response.card_proposals[0].source_refs == ["input:experience_text"]
+    assert response.card_proposals[0].experience_id == "conversation-1"
+    assert response.card_proposals[0].source_refs[0] == "experience:conversation-1"
+    assert response.card_proposals[0].evidence_history[0].experience_id == "conversation-1"
 
 
 def test_profile_agent_rejects_an_overlong_card_title_for_model_failover():

@@ -112,8 +112,17 @@ class ProfileConversationSnapshot(ProfileConversationSnapshotUpsert):
 
 class ProfileProposalRequest(BaseModel):
     experience_text: str = Field(min_length=1, max_length=12000)
+    experience_id: str | None = Field(default=None, min_length=1, max_length=120)
     target_role: str | None = Field(default=None, max_length=120)
     existing_card_titles: list[str] = Field(default_factory=list, max_length=20)
+    existing_cards: list["ExistingProfileCard"] = Field(default_factory=list, max_length=20)
+
+
+class ExistingProfileCard(BaseModel):
+    id: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=80)
+    category: CardCategory
+    description: str = Field(min_length=1, max_length=240)
 
 
 class MaterialExtractResponse(BaseModel):
@@ -177,6 +186,17 @@ class CardProposal(BaseModel):
     next_verification: str = Field(min_length=1, max_length=240)
     match_reason: str = Field(min_length=1, max_length=300)
     workplace_application: str = Field(min_length=1, max_length=300)
+    experience_id: str | None = Field(default=None, max_length=120)
+    resolution: Literal["new", "merge"] = "new"
+    merge_target_card_id: str | None = Field(default=None, max_length=120)
+    evidence_history: list["AbilityEvidenceEntry"] = Field(default_factory=list, max_length=30)
+
+
+class AbilityEvidenceEntry(BaseModel):
+    experience_id: str = Field(min_length=1, max_length=120)
+    evidence_quote: str = Field(min_length=1, max_length=500)
+    source_refs: list[str] = Field(default_factory=list, max_length=10)
+    trace_id: str | None = Field(default=None, max_length=100)
 
 
 class ProfileProposalResponse(BaseModel):

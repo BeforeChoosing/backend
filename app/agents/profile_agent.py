@@ -20,7 +20,7 @@ from app.services.llm_gateway import DashScopeQwenGateway
 class ProfileAgent:
     """Generate candidate evidence cards; it never confirms or persists them."""
 
-    PROMPT_VERSION = "profile-v3-title-format"
+    PROMPT_VERSION = "profile-v4-evidence-merge"
     EXPLORATION_PROMPT_VERSION = "profile-exploration-v4-star"
     MATERIAL_PROMPT_VERSION = "profile-material-understanding-v1"
     EXPLORATION_SYSTEM_PROMPT = """你是“选择之前”的潜能探索教练。你通过用户主动提供的经历和补充对话，帮助用户发现尚未表达清楚的行动、判断和可验证潜能。
@@ -88,6 +88,7 @@ class ProfileAgent:
       "description": "", "detail": "", "claim_level": "fact|interpretation|hypothesis",
       "evidence_type": "documented_fact|self_report|inference", "evidence_quote": "",
       "source_refs": ["input:experience_text"], "pending_verification": true,
+      "resolution": "new|merge", "merge_target_card_id": null,
       "next_verification": "", "match_reason": "", "workplace_application": ""
     }
   ],
@@ -330,19 +331,24 @@ class ProfileAgent:
             self.SYSTEM_PROMPT,
             user_prompt,
             validator=lambda payload: self._normalize(
-                payload, trace_id, request.experience_text
+                payload, trace_id, request
             ),
         )
-        return self._normalize(raw, trace_id, request.experience_text)
+        return self._normalize(raw, trace_id, request)
 
     @staticmethod
     def _build_prompt(request: ProfileProposalRequest) -> str:
         target_role = request.target_role or "未指定目标岗位"
-        existing = "、".join(request.existing_card_titles) or "暂无已确认能力卡"
+        existing = json.dumps(
+            [card.model_dump(mode="json") for card in request.existing_cards],
+            ensure_ascii=False,
+        ) if request.existing_cards else "暂无已确认能力卡"
         return (
             f"提示词版本：{ProfileAgent.PROMPT_VERSION}\n"
             f"目标岗位：{target_role}\n"
-            f"用户已经确认的能力卡（只用于避免重复）：{existing}\n"
+            f"用户已经确认的能力卡：{existing}\n"
+            "逐张判断候选能力与已有能力是否表达同一核心能力。若相同，resolution 必须为 merge，"
+            "并填写已有卡片的 merge_target_card_id；只有核心能力确实不同时才输出 new。\n"
             "以下是用户主动提供的经历。先找行动和结果，再整理候选能力卡：\n"
             "--- BEGIN EXPERIENCE ---\n"
             f"{request.experience_text}\n"
@@ -353,15 +359,21 @@ class ProfileAgent:
     def _normalize(
         raw: dict[str, Any],
         trace_id: str,
-        experience_text: str,
+        request: ProfileProposalRequest,
     ) -> ProfileProposalResponse:
+        experience_text = request.experience_text
+        experience_id = request.experience_id or f"trace:{trace_id}"
+        source_ref = f"experience:{experience_id}"
+        existing_ids = {card.id for card in request.existing_cards}
         experience_raw = raw.get("experience") or {}
         experience = ExperienceSummary(
             title=str(experience_raw.get("title") or "未命名经历")[:120],
             actions=[str(item)[:120] for item in (experience_raw.get("actions") or [])[:8]],
             result=(str(experience_raw["result"])[:500] if experience_raw.get("result") else None),
-            source_refs=[str(item)[:120] for item in (experience_raw.get("source_refs") or [])[:10]]
-            or ["input:experience_text"],
+            source_refs=list(dict.fromkeys([
+                source_ref,
+                *[str(item)[:120] for item in (experience_raw.get("source_refs") or [])[:9]],
+            ]))[:10],
         )
 
         categories = {"洞察分析", "产品策略", "技术落地", "数据驱动", "协作沟通", "交互体验"}
@@ -396,6 +408,12 @@ class ProfileAgent:
                 evidence_quote = "模型未返回可逐字核对的原文片段"
                 claim_level = "hypothesis"
                 evidence_type = "inference"
+            merge_target = str(item.get("merge_target_card_id") or "").strip() or None
+            resolution = "merge" if item.get("resolution") == "merge" and merge_target in existing_ids else "new"
+            if resolution == "new":
+                merge_target = None
+            item_refs = [str(ref)[:120] for ref in (item.get("source_refs") or [])[:9]]
+            source_refs = list(dict.fromkeys([source_ref, *item_refs]))[:10]
             cards.append(
                 CardProposal(
                     id=f"proposal-{trace_id[:8]}-{index + 1}",
@@ -408,12 +426,20 @@ class ProfileAgent:
                     claim_level=claim_level,  # type: ignore[arg-type]
                     evidence_type=evidence_type,  # type: ignore[arg-type]
                     evidence_quote=evidence_quote,
-                    source_refs=[str(ref)[:120] for ref in (item.get("source_refs") or [])[:10]]
-                    or ["input:experience_text"],
+                    source_refs=source_refs,
                     pending_verification=bool(item.get("pending_verification", True)),
                     next_verification=str(item.get("next_verification") or "补充一个具体结果，或用一个小任务再试一次")[:240],
                     match_reason=str(item.get("match_reason") or f"来自这段描述：{evidence_quote}")[:300],
                     workplace_application=str(item.get("workplace_application") or "可以在一个相关岗位小任务中继续尝试")[:300],
+                    experience_id=experience_id,
+                    resolution=resolution,
+                    merge_target_card_id=merge_target,
+                    evidence_history=[{
+                        "experience_id": experience_id,
+                        "evidence_quote": evidence_quote,
+                        "source_refs": source_refs,
+                        "trace_id": trace_id,
+                    }],
                 )
             )
 
