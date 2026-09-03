@@ -1,6 +1,6 @@
 [project]
 name = "before-choosing-backend"
-version = "0.1.0"
+version = "1.1.0"
 description = "选择之前比赛 Demo 后端"
 requires-python = ">=3.11"
 dependencies = [

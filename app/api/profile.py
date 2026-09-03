@@ -23,6 +23,8 @@ from app.schemas.profile import (
     ProfileConversationSnapshot,
     ProfileConversationSnapshotUpsert,
     ProfileOverviewResponse,
+    ProfileMemoryResetRequest,
+    ProfileMemoryResetResponse,
     ProfileProposalRequest,
     ProfileProposalResponse,
 )
@@ -46,6 +48,9 @@ from app.services.profile_exploration_controller import (
 )
 from app.services.profile_store import ProfileStore
 from app.services.user_data import user_data_path
+from app.services.user_memory import reset_user_memory
+from app.services.llm_request_queue import get_llm_request_queue
+from app.version import APP_VERSION
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/profile", tags=["profile"])
@@ -531,6 +536,45 @@ def get_profile_cards() -> ProfileCardsResponse:
 @router.get("/overview", response_model=ProfileOverviewResponse)
 def get_profile_overview() -> ProfileOverviewResponse:
     return _profile_store().get_profile_overview()
+
+
+@router.delete("/memory", response_model=ProfileMemoryResetResponse)
+def delete_profile_memory(
+    request: ProfileMemoryResetRequest,
+) -> ProfileMemoryResetResponse:
+    """Clear product memory while preserving the account and audit trail."""
+
+    del request  # Literal validation above is the destructive-action confirmation.
+    context = get_request_context()
+    user_id = _formal_user_id()
+    settings = get_settings()
+    queue = get_llm_request_queue(
+        max_concurrency=settings.llm_max_concurrency,
+        max_requests_per_minute=settings.llm_max_requests_per_minute,
+        model_max_concurrency=settings.llm_model_max_concurrency,
+    )
+    cancelled_requests = queue.cancel_all_for_user(user_id)
+    removed_records, removed_files = reset_user_memory(
+        user_data_path(settings.profile_db_path),
+        account_db_path=settings.profile_db_path,
+        user_id=user_id,
+    )
+    _record_business_event(
+        "profile_memory",
+        "profile.memory.reset",
+        {
+            "removed_records": removed_records,
+            "removed_files": removed_files,
+            "cancelled_requests": cancelled_requests,
+            "request_id": context.request_id,
+        },
+    )
+    return ProfileMemoryResetResponse(
+        removed_records=removed_records,
+        removed_files=removed_files,
+        cancelled_requests=cancelled_requests,
+        version=APP_VERSION,
+    )
 
 
 @router.get("/conversations")

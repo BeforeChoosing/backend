@@ -190,9 +190,79 @@ def test_uploaded_materials_are_account_scoped(api):
     assert downloaded.content == '仅属于 Alice 的材料'.encode()
 
 
+def test_memory_reset_clears_only_current_account_and_keeps_login(api):
+    c, _ = api
+    alice, bob = account(c, 'reset-alice'), account(c, 'reset-bob')
+    for headers, title in ((alice, 'Alice 能力'), (bob, 'Bob 能力')):
+        assert c.post(
+            '/api/v1/profile/cards/confirm',
+            headers=headers,
+            json={'cards': [card(title=title)]},
+        ).status_code == 200
+    snapshot = {
+        'title': '待清空对话',
+        'messages': [{'id': 'message-1', 'role': 'user', 'content': '我的经历'}],
+        'evidence': '我的经历',
+        'materials': [],
+        'target_career_state': 'unselected',
+        'target_role': '',
+        'model_tier': 'balanced',
+    }
+    assert c.put(
+        '/api/v1/profile/conversation-snapshots/conversation-reset',
+        headers=alice,
+        json=snapshot,
+    ).status_code == 200
+    material = c.post(
+        '/api/v1/profile/materials/extract',
+        headers=alice,
+        files={'file': ('reset.md', '待清空材料'.encode(), 'text/markdown')},
+    )
+    material_id = material.json()['stored_material_id']
+    session = c.post(
+        '/api/v1/trial/workbench/sessions', headers=alice, json={'task_id': 'A-02'}
+    ).json()['id']
+
+    denied = c.request(
+        'DELETE', '/api/v1/profile/memory', headers=alice,
+        json={'confirmation': 'WRONG'},
+    )
+    assert denied.status_code == 422
+    reset = c.request(
+        'DELETE', '/api/v1/profile/memory', headers=alice,
+        json={'confirmation': 'CLEAR_ALL_MEMORY'},
+    )
+    assert reset.status_code == 200
+    assert reset.json()['cleared'] is True
+    assert reset.json()['removed_records'] >= 4
+    assert reset.json()['removed_files'] == 1
+    assert reset.json()['version'] == '1.1.0'
+
+    assert c.get('/api/v1/auth/me', headers=alice).status_code == 200
+    assert c.get('/api/v1/profile/overview', headers=alice).json()['cards'] == []
+    assert c.get('/api/v1/profile/conversation-snapshots', headers=alice).json() == []
+    assert c.get(f'/api/v1/profile/materials/{material_id}', headers=alice).status_code == 404
+    assert c.get(f'/api/v1/trial/workbench/sessions/{session}', headers=alice).status_code == 404
+    assert c.get('/api/v1/profile/overview', headers=bob).json()['cards'][0]['title'] == 'Bob 能力'
+    assert any(
+        event['action'] == 'profile.memory.reset'
+        for event in c.get('/api/v1/audit/events', headers=alice).json()
+    )
+
+    repeated = c.request(
+        'DELETE', '/api/v1/profile/memory', headers=alice,
+        json={'confirmation': 'CLEAR_ALL_MEMORY'},
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()['removed_records'] == 0
+    assert repeated.json()['removed_files'] == 0
+
+
 def test_public_catalog_preflight_and_revoked_token(api):
     c, _ = api
-    assert c.get('/api/v1/health').status_code == 200
+    health = c.get('/api/v1/health')
+    assert health.status_code == 200
+    assert health.json()['version'] == '1.1.0'
     assert c.get('/api/v1/trial/catalog', headers={'X-App-Mode': 'demo'}).status_code == 200
     assert c.options('/api/v1/profile/cards', headers={
         'Origin': 'http://localhost:3000', 'Access-Control-Request-Method': 'GET',

@@ -227,6 +227,26 @@ class LLMRequestQueue:
                     return True
             return False
 
+    def cancel_all_for_user(self, user_id: str) -> int:
+        """Cancel every active or queued request owned by one account."""
+
+        cancelled = 0
+        with self._condition:
+            for ticket in self._active.values():
+                if ticket.user_id == user_id and not ticket.cancel_requested:
+                    ticket.cancel_requested = True
+                    cancelled += 1
+            for ticket in tuple(self._waiting):
+                if ticket.user_id != user_id:
+                    continue
+                ticket.cancel_requested = True
+                self._remove_waiting(ticket)
+                ticket.state = "cancelled"
+                cancelled += 1
+            if cancelled:
+                self._condition.notify_all()
+        return cancelled
+
 
 _queue: LLMRequestQueue | None = None
 _queue_config: tuple[int, int, int] | None = None

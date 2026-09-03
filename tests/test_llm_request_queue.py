@@ -109,6 +109,43 @@ def test_same_user_requests_are_serialised_while_other_users_can_run() -> None:
     assert same_user_started.is_set()
 
 
+def test_cancel_all_for_user_removes_queued_requests_and_marks_active() -> None:
+    queue = LLMRequestQueue(max_concurrency=1, max_requests_per_minute=20)
+    active_started = Event()
+    release_active = Event()
+    cancelled = [Event(), Event()]
+
+    def active() -> None:
+        try:
+            with queue.admission(request_id="active", user_id="user-reset"):
+                active_started.set()
+                release_active.wait(2)
+        except LLMRequestCancelled:
+            cancelled[0].set()
+
+    def waiting() -> None:
+        try:
+            with queue.admission(request_id="waiting", user_id="user-reset"):
+                raise AssertionError("reset must cancel queued work")
+        except LLMRequestCancelled:
+            cancelled[1].set()
+
+    active_thread = Thread(target=active)
+    waiting_thread = Thread(target=waiting)
+    active_thread.start()
+    assert active_started.wait(1)
+    waiting_thread.start()
+    sleep(0.05)
+
+    assert queue.cancel_all_for_user("user-reset") == 2
+    assert cancelled[1].wait(1)
+    release_active.set()
+    assert cancelled[0].wait(1)
+    active_thread.join(1)
+    waiting_thread.join(1)
+    assert queue.status_for_user("user-reset")["state"] == "idle"
+
+
 def test_pool_routes_to_an_idle_model_before_queueing() -> None:
     queue = LLMRequestQueue(
         max_concurrency=2,

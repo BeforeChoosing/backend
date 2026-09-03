@@ -20,6 +20,7 @@ from app.api.trial import router as trial_router
 from app.config import get_settings
 from app.services.audit_log import AuditLogStore
 from app.services.auth_store import AuthStore
+from app.version import APP_VERSION
 from app.services.request_context import (
     RequestContext,
     reset_request_context,
@@ -27,7 +28,7 @@ from app.services.request_context import (
 )
 
 settings = get_settings()
-app = FastAPI(title=settings.app_name, version="0.1.0")
+app = FastAPI(title=settings.app_name, version=APP_VERSION)
 app.add_exception_handler(HTTPException, http_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 

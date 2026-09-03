@@ -251,3 +251,15 @@ class ProfileOverviewResponse(ProfileCardsResponse):
     evidence: list[ProfileEvidenceRecord] = Field(default_factory=list)
     completed_task_ids: list[str] = Field(default_factory=list)
     notice: str = "能力卡来自用户确认，任务证据来自已提交的试路评价。"
+
+
+class ProfileMemoryResetRequest(BaseModel):
+    confirmation: Literal["CLEAR_ALL_MEMORY"]
+
+
+class ProfileMemoryResetResponse(BaseModel):
+    cleared: Literal[True] = True
+    removed_records: int = Field(ge=0)
+    removed_files: int = Field(ge=0)
+    cancelled_requests: int = Field(ge=0)
+    version: str
