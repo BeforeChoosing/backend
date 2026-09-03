@@ -124,6 +124,153 @@ def test_stream_json_forwards_deltas_and_uses_fast_model(monkeypatch, tmp_path) 
     assert observed["timeout"] == 7
 
 
+def test_thinking_stream_forwards_reasoning_and_uses_thinking_payload(
+    monkeypatch, tmp_path
+) -> None:
+    observed: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            chunks = [
+                {"choices": [{"delta": {"reasoning_content": "先核对证据。"}}]},
+                {"choices": [{"delta": {"content": '{"reply":"已收到"}'}}]},
+                {
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 8,
+                        "completion_tokens": 12,
+                        "completion_tokens_details": {"reasoning_tokens": 5},
+                    },
+                },
+            ]
+            for chunk in chunks:
+                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n".encode()
+            yield b"data: [DONE]\n"
+
+    @contextmanager
+    def admission(**kwargs):
+        yield QueueTicket(
+            request_id=kwargs["request_id"],
+            user_id=kwargs["user_id"],
+            state="running",
+            enqueued_at=100.0,
+            started_at=100.0,
+        )
+
+    class FakeQueue:
+        def admission(self, **kwargs):
+            return admission(**kwargs)
+
+    def fake_urlopen(request, timeout):
+        observed["payload"] = json.loads(request.data.decode())
+        observed["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(llm_gateway, "get_llm_request_queue", lambda **kwargs: FakeQueue())
+    monkeypatch.setattr(llm_gateway.urllib.request, "urlopen", fake_urlopen)
+    settings = Settings(
+        dashscope_api_key="test-key",
+        request_timeout_seconds=7,
+        thinking_request_timeout_seconds=13,
+        thinking_budget=2048,
+        qwen_thinking_models=("demo-thinking",),
+        profile_db_path=str(tmp_path / "profile.db"),
+    )
+    deltas: list[str] = []
+    reasoning: list[str] = []
+
+    result = llm_gateway.DashScopeQwenGateway(settings).stream_json(
+        "system",
+        "user",
+        model="demo-thinking",
+        on_delta=deltas.append,
+        on_thinking_delta=reasoning.append,
+    )
+
+    payload = observed["payload"]
+    assert result["reply"] == "已收到"
+    assert result["_thinking_enabled"] is True
+    assert result["_reasoning_content"] == "先核对证据。"
+    assert result["_reasoning_tokens"] == 5
+    assert reasoning == ["先核对证据。"]
+    assert deltas == ['{"reply":"已收到"}']
+    assert payload["enable_thinking"] is True
+    assert payload["thinking_budget"] == 2048
+    assert "response_format" not in payload
+    assert observed["timeout"] == 13
+
+
+def test_thinking_stream_repairs_free_form_output_with_fast_model(
+    monkeypatch, tmp_path
+) -> None:
+    attempted: list[str] = []
+
+    class StreamResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            yield 'data: {"choices":[{"delta":{"reasoning_content":"分析"}}]}\n'.encode()
+            yield 'data: {"choices":[{"delta":{"content":"最终结论：收到"}}]}\n'.encode()
+            yield b"data: [DONE]\n"
+
+    class JsonResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return '{"choices":[{"message":{"content":"{\\"reply\\":\\"修复后收到\\"}"}}]}'.encode()
+
+    @contextmanager
+    def admission(**kwargs):
+        yield QueueTicket(
+            request_id=kwargs["request_id"],
+            user_id=kwargs["user_id"],
+            state="running",
+            enqueued_at=100.0,
+            started_at=100.0,
+        )
+
+    class FakeQueue:
+        def admission(self, **kwargs):
+            return admission(**kwargs)
+
+    def fake_urlopen(request, timeout):
+        model = json.loads(request.data.decode())["model"]
+        attempted.append(model)
+        return StreamResponse() if model == "demo-thinking" else JsonResponse()
+
+    monkeypatch.setattr(llm_gateway, "get_llm_request_queue", lambda **kwargs: FakeQueue())
+    monkeypatch.setattr(llm_gateway.urllib.request, "urlopen", fake_urlopen)
+    settings = Settings(
+        dashscope_api_key="test-key",
+        qwen_fast_models=("demo-fast",),
+        qwen_thinking_models=("demo-thinking",),
+        profile_db_path=str(tmp_path / "profile.db"),
+    )
+
+    result = llm_gateway.DashScopeQwenGateway(settings).stream_json(
+        "system", "user", model="demo-thinking", on_delta=lambda _text: None
+    )
+
+    assert result["reply"] == "修复后收到"
+    assert result["_thinking_enabled"] is True
+    assert result["_reasoning_content"] == "分析"
+    assert attempted == ["demo-thinking", "demo-fast"]
+
+
 def test_stream_json_resets_partial_output_before_model_failover(
     monkeypatch, tmp_path
 ) -> None:

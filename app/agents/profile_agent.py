@@ -238,16 +238,22 @@ class ProfileAgent:
         *,
         on_delta: Callable[[str], None],
         on_reset: Callable[[], None] | None = None,
+        on_thinking_delta: Callable[[str], None] | None = None,
     ) -> ProfileExplorationResponse:
+        stream_kwargs: dict[str, Any] = {
+            "on_delta": on_delta,
+            "on_reset": on_reset,
+            "tier": request.model_tier,
+            "validator": lambda payload: self._normalize_exploration(
+                payload, trace_id
+            ),
+        }
+        if on_thinking_delta is not None:
+            stream_kwargs["on_thinking_delta"] = on_thinking_delta
         raw = self.gateway.stream_json(
             self.EXPLORATION_SYSTEM_PROMPT,
             self._build_exploration_prompt(request),
-            on_delta=on_delta,
-            on_reset=on_reset,
-            tier=request.model_tier,
-            validator=lambda payload: self._normalize_exploration(
-                payload, trace_id
-            ),
+            **stream_kwargs,
         )
         return self._normalize_exploration(raw, trace_id)
 
@@ -320,6 +326,19 @@ class ProfileAgent:
             round_number = int(raw_round or 1)
         except (TypeError, ValueError):
             round_number = 1
+        thinking_enabled = bool(raw.get("_thinking_enabled", False))
+        reasoning_content = str(raw.get("_reasoning_content") or "")[:24000]
+        thinking_model = (
+            str(raw.get("_selected_model") or "").strip()[:120] or None
+            if thinking_enabled
+            else None
+        )
+        reasoning_tokens = raw.get("_reasoning_tokens")
+        if not isinstance(reasoning_tokens, int) or isinstance(reasoning_tokens, bool):
+            reasoning_tokens = None
+        reasoning_status = (
+            "complete" if reasoning_content else "unavailable"
+        ) if thinking_enabled else "disabled"
         return ProfileExplorationResponse(
             trace_id=trace_id,
             reply=reply[:300],
@@ -334,6 +353,11 @@ class ProfileAgent:
             star_dimension=str(raw.get("star_dimension") or "S") if str(raw.get("star_dimension") or "S") in {"S", "T", "A", "R"} else "S",
             round_number=max(1, min(round_number, 4)),
             next_action="summarize" if raw.get("next_action") == "summarize" else "ask",
+            reasoning_content=reasoning_content,
+            thinking_enabled=thinking_enabled,
+            thinking_model=thinking_model,
+            reasoning_tokens=reasoning_tokens,
+            reasoning_status=reasoning_status,  # type: ignore[arg-type]
         )
 
     async def propose(

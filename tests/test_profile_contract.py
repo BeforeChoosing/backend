@@ -162,3 +162,24 @@ def test_profile_agent_exploration_preserves_valid_question_reply():
 
     assert response.focus_dimension == "ownership"
     assert response.reply == "你具体做了什么？"
+
+
+def test_profile_agent_exploration_preserves_provider_reasoning_metadata():
+    response = ProfileAgent._normalize_exploration(
+        {
+            "reply": "补充你当时的判断依据。",
+            "focus_dimension": "decision",
+            "evidence_gap": "仍缺少判断依据。",
+            "_selected_model": "qwen3-30b-a3b-thinking-2507",
+            "_thinking_enabled": True,
+            "_reasoning_content": "先核对用户明确说出的行动，再决定追问维度。",
+            "_reasoning_tokens": 17,
+        },
+        "trace-thinking",
+    )
+
+    assert response.thinking_enabled is True
+    assert response.thinking_model == "qwen3-30b-a3b-thinking-2507"
+    assert response.reasoning_content.startswith("先核对")
+    assert response.reasoning_tokens == 17
+    assert response.reasoning_status == "complete"

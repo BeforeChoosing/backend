@@ -8,7 +8,7 @@ from typing import Literal
 from app.config import Settings
 
 
-TextModelTier = Literal["fast", "balanced", "reasoning"]
+TextModelTier = Literal["fast", "balanced", "comprehensive", "thinking", "reasoning"]
 VisionModelPool = Literal["fast", "ocr", "general", "reasoning"]
 
 
@@ -29,8 +29,17 @@ class ModelRegistry:
     def text(self, tier: TextModelTier | None = None) -> ModelSelection:
         if tier == "fast":
             candidates = self.settings.qwen_fast_models
-        elif tier == "reasoning":
-            candidates = self.settings.qwen_reasoning_models
+        elif tier in {"comprehensive", "reasoning"}:
+            candidates = getattr(
+                self.settings,
+                "qwen_comprehensive_models",
+                self.settings.qwen_reasoning_models,
+            )
+        elif tier == "thinking":
+            candidates = (
+                *getattr(self.settings, "qwen_thinking_models", ()),
+                *getattr(self.settings, "qwen_thinking_fallback_models", ()),
+            )
         elif tier == "balanced":
             candidates = self.settings.qwen_balanced_models
         else:
@@ -38,7 +47,14 @@ class ModelRegistry:
                 *self.settings.qwen_balanced_models,
                 *self.settings.qwen_reasoning_models,
             )
-        return ModelSelection(f"text:{tier or 'core'}", _unique(candidates))
+        normalized_tier = "comprehensive" if tier == "reasoning" else (tier or "core")
+        return ModelSelection(f"text:{normalized_tier}", _unique(candidates))
+
+    def is_thinking_model(self, model: str) -> bool:
+        return model in {
+            *getattr(self.settings, "qwen_thinking_models", ()),
+            *getattr(self.settings, "qwen_thinking_fallback_models", ()),
+        } or model.endswith("-thinking") or "-thinking-" in model
 
     def vision(self, pool: VisionModelPool) -> ModelSelection:
         candidates = {

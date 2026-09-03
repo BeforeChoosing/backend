@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import re
@@ -293,6 +294,10 @@ async def stream_profile_exploration_message(
                         response = ProfileExplorationResponse.model_validate(cached)
                         response = response.model_copy(update={"cache_hit": True})
                         _record_exploration_turn(request, response)
+                        if response.reasoning_content:
+                            yield _stream_event(
+                                "thinking_delta", {"text": response.reasoning_content}
+                            )
                         yield _stream_event("delta", {"text": response.reply})
                         yield _stream_event("done", response.model_dump(mode="json"))
                         return
@@ -311,6 +316,13 @@ async def stream_profile_exploration_message(
                             event_queue.put_nowait, ("delta", {"text": reply_delta})
                         )
 
+                def emit_thinking_delta(raw_delta: str) -> None:
+                    if raw_delta:
+                        loop.call_soon_threadsafe(
+                            event_queue.put_nowait,
+                            ("thinking_delta", {"text": raw_delta}),
+                        )
+
                 def reset_model_delta() -> None:
                     nonlocal reply_accumulator
                     reply_accumulator = JsonStringFieldAccumulator("reply")
@@ -321,12 +333,22 @@ async def stream_profile_exploration_message(
                 def produce() -> None:
                     worker_token = set_request_context(context)
                     try:
+                        agent = _profile_agent()
+                        stream_kwargs = {
+                            "on_delta": emit_model_delta,
+                            "on_reset": reset_model_delta,
+                        }
+                        # Keep compatibility with lightweight integrations
+                        # that implement the pre-thinking callback contract.
+                        if "on_thinking_delta" in inspect.signature(
+                            agent.explore_stream
+                        ).parameters:
+                            stream_kwargs["on_thinking_delta"] = emit_thinking_delta
                         response = apply_exploration_controller(
-                            _profile_agent().explore_stream(
+                            agent.explore_stream(
                                 request,
                                 trace_id,
-                                on_delta=emit_model_delta,
-                                on_reset=reset_model_delta,
+                                **stream_kwargs,
                             ),
                             request,
                         )

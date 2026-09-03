@@ -37,8 +37,19 @@ def log_event(event: str, *, level: str = 'info', error: Exception | None = None
         'request_id': context.request_id, 'user_id': context.user_id or None,
     }
     # An allowlist prevents accidental logging of credentials, answers or headers.
-    allowed = {'method', 'route', 'status_code', 'duration_ms', 'error_code',
-               'client_request_id', 'model', 'input_tokens', 'output_tokens', 'upstream_status'}
+    allowed = {
+        'method', 'route', 'status_code', 'duration_ms', 'error_code',
+        'client_request_id', 'model', 'input_tokens', 'output_tokens',
+        'upstream_status',
+        # Retrieval and model-routing diagnostics are bounded, non-content
+        # fields.  Query text, prompts, attachments and model reasoning are
+        # deliberately excluded from this allowlist.
+        'stage', 'corpus', 'retriever_mode', 'query_count', 'candidate_count',
+        'hit_count', 'document_count', 'vector_used', 'rerank_used',
+        'adaptive_rerank_triggered', 'embedding_batch_calls', 'query_coverage',
+        'fallback', 'cache_hit', 'thinking_enabled', 'reasoning_tokens',
+        'json_repair', 'repair_model',
+    }
     record.update({k: v for k, v in fields.items() if k in allowed})
     if error is not None:
         record['exception_type'] = type(error).__name__

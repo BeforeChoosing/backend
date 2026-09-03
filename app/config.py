@@ -46,6 +46,12 @@ _DEFAULT_TEXT_REASONING_MODELS = (
     "qwen3.7-max-2026-06-08,qwen3.7-max-preview,qwen3.7-max-2026-05-17,"
     "qwen3.8-max"
 )
+_DEFAULT_TEXT_THINKING_MODELS = (
+    "qwen3-30b-a3b-thinking-2507,qwen3-235b-a22b-thinking-2507"
+)
+_DEFAULT_TEXT_THINKING_FALLBACK_MODELS = (
+    "qwen3.7-plus,qwen3.7-max,qwen3.8-max"
+)
 
 
 @dataclass(frozen=True)
@@ -65,6 +71,30 @@ class Settings:
     qwen_reasoning_models: tuple[str, ...] = _csv(
         _env_or_default("QWEN_REASONING_MODELS", _DEFAULT_TEXT_REASONING_MODELS)
     )
+    # ``reasoning`` is retained as the compatibility name for the former
+    # comprehensive (non-thinking) tier. New clients use ``comprehensive``.
+    qwen_comprehensive_models: tuple[str, ...] = _csv(
+        _env_or_default(
+            "QWEN_COMPREHENSIVE_MODELS",
+            os.getenv("QWEN_REASONING_MODELS", _DEFAULT_TEXT_REASONING_MODELS),
+        )
+    )
+    qwen_thinking_models: tuple[str, ...] = _csv(
+        _env_or_default("QWEN_THINKING_MODELS", _DEFAULT_TEXT_THINKING_MODELS)
+    )
+    qwen_thinking_fallback_models: tuple[str, ...] = _csv(
+        _env_or_default(
+            "QWEN_THINKING_FALLBACK_MODELS",
+            _DEFAULT_TEXT_THINKING_FALLBACK_MODELS,
+        )
+    )
+    thinking_budget: int = int(os.getenv("THINKING_BUDGET", "4096"))
+    thinking_request_timeout_seconds: float = float(
+        os.getenv("THINKING_REQUEST_TIMEOUT", "240")
+    )
+    thinking_preserve_history: bool = os.getenv(
+        "THINKING_PRESERVE_HISTORY", "false"
+    ).lower() in {"1", "true", "yes", "on"}
     trial_base_model: str = os.getenv("TRIAL_BASE_MODEL", "")
     trial_sft_model: str = os.getenv("TRIAL_SFT_MODEL", "")
     trial_verifier_model: str = os.getenv("TRIAL_VERIFIER_MODEL", "")

@@ -26,8 +26,9 @@ ExplorationFocus = Literal[
     "evidence",
 ]
 ExplorationCoverageStatus = Literal["missing", "weak", "sufficient", "confirmed"]
-ModelTier = Literal["fast", "balanced", "reasoning"]
+ModelTier = Literal["fast", "balanced", "comprehensive", "thinking", "reasoning"]
 StarDimension = Literal["S", "T", "A", "R"]
+ReasoningStatus = Literal["disabled", "streaming", "complete", "unavailable"]
 
 
 class ProfileConversationMessage(BaseModel):
@@ -75,6 +76,14 @@ class ProfileExplorationResponse(BaseModel):
     round_number: int = Field(default=1, ge=1, le=4)
     next_action: Literal["ask", "summarize"] = "ask"
     finalization_reason: str | None = Field(default=None, max_length=160)
+    # Thinking output is provider-returned reasoning_content only.  It is
+    # persisted with the turn so the client can render it on reload; it is not
+    # included in ordinary model prompts or operational logs.
+    reasoning_content: str = Field(default="", max_length=24000)
+    thinking_enabled: bool = False
+    thinking_model: str | None = Field(default=None, max_length=120)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
+    reasoning_status: ReasoningStatus = "disabled"
 
 
 class ProfileConversationSnapshotMessage(BaseModel):
@@ -87,6 +96,11 @@ class ProfileConversationSnapshotMessage(BaseModel):
     model: str | None = Field(default=None, max_length=120)
     cache_hit: bool | None = None
     star_dimension: StarDimension | None = None
+    reasoning_content: str = Field(default="", max_length=24000)
+    thinking_enabled: bool = False
+    thinking_model: str | None = Field(default=None, max_length=120)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
+    reasoning_status: ReasoningStatus = "disabled"
 
 
 class ProfileConversationMaterial(BaseModel):

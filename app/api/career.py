@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from functools import lru_cache
 
 from fastapi import APIRouter, HTTPException
@@ -15,6 +16,7 @@ from app.schemas.career import (
     CareerSupport,
 )
 from app.services.llm_gateway import DashScopeQwenGateway, LLMGatewayError, llm_error_status
+from app.services.runtime_log import log_event
 from app.services.audit_log import record_business_event
 from app.services.model_response_cache import ModelResponseCache
 from app.services.profile_store import ProfileStore
@@ -145,22 +147,65 @@ async def create_career_recommendation(
     try:
         retriever = _knowledge_retriever()
         planned_queries = build_career_queries(cards, target_role=request.target_role)
-        if hasattr(retriever, "search_many"):
-            retrieved = retriever.search_many(
-                planned_queries,
+        retrieval_started = time.perf_counter()
+        try:
+            if hasattr(retriever, "search_many"):
+                retrieved = retriever.search_many(
+                    planned_queries,
+                    corpus="career",
+                    document_id=AI_PRODUCT_MANAGER_DOCUMENT_ID,
+                    limit=5,
+                )
+            else:
+                # Keep an explicit FTS fallback for older/local retriever instances.
+                query = " ".join(planned_queries)
+                retrieved = retriever.search(
+                    query,
+                    corpus="career",
+                    document_id=AI_PRODUCT_MANAGER_DOCUMENT_ID,
+                    limit=5,
+                )
+        except Exception as exc:  # noqa: BLE001 - preserve the API error mapping
+            log_event(
+                "knowledge_retrieval_failed",
+                level="error",
+                error=exc,
+                stage="career",
                 corpus="career",
-                document_id=AI_PRODUCT_MANAGER_DOCUMENT_ID,
-                limit=5,
+                query_count=len(planned_queries),
+                retriever_mode=str(
+                    getattr(retriever, "last_diagnostics", {}).get("mode", "unknown")
+                )[:80],
+                duration_ms=round((time.perf_counter() - retrieval_started) * 1000, 3),
             )
-        else:
-            # Keep an explicit FTS fallback for older/local retriever instances.
-            query = " ".join(planned_queries)
-            retrieved = retriever.search(
-                query,
-                corpus="career",
-                document_id=AI_PRODUCT_MANAGER_DOCUMENT_ID,
-                limit=5,
-            )
+            raise
+        diagnostics = getattr(retriever, "last_diagnostics", {})
+        per_query_ids = diagnostics.get("per_query_result_ids")
+        candidate_count = (
+            len({str(item) for values in per_query_ids if isinstance(values, list) for item in values})
+            if isinstance(per_query_ids, list)
+            else None
+        )
+        log_event(
+            "knowledge_retrieval_completed",
+            level="info",
+            stage="career",
+            corpus="career",
+            query_count=len(planned_queries),
+            candidate_count=candidate_count,
+            hit_count=len(retrieved),
+            document_count=len({chunk.document_id for chunk in retrieved}),
+            retriever_mode=str(diagnostics.get("mode", "unknown"))[:80],
+            vector_used=bool(diagnostics.get("vector_used", False)),
+            rerank_used=bool(diagnostics.get("rerank_used", False)),
+            adaptive_rerank_triggered=bool(
+                diagnostics.get("adaptive_rerank_triggered", False)
+            ),
+            embedding_batch_calls=diagnostics.get("embedding_batch_calls"),
+            query_coverage=diagnostics.get("query_coverage"),
+            fallback=not bool(diagnostics.get("vector_used", False)),
+            duration_ms=round((time.perf_counter() - retrieval_started) * 1000, 3),
+        )
         if not retrieved:
             raise HTTPException(status_code=503, detail="暂时没有找到可参考的岗位资料。")
         task_recommendation = recommend_trial_task(
