@@ -56,6 +56,7 @@ class DashScopeQwenGateway:
         *,
         model: str | None = None,
         tier: TextModelTier | None = None,
+        validator: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         if not self.settings.qwen_configured:
             raise LLMGatewayError(
@@ -78,10 +79,10 @@ class DashScopeQwenGateway:
         # tracked separately so a busy FIFO does not consume the DashScope
         # response timeout.
         started = time.perf_counter()
-        upstream_started: float | None = None
         queue_wait_ms = 0.0
         failover_count = 0
         remaining_models = list(self.model_health.available(selection.candidates))
+        last_error: LLMGatewayError | None = None
         try:
             while remaining_models:
                 with queue.admission(
@@ -108,7 +109,7 @@ class DashScopeQwenGateway:
                             raw_body = response.read().decode("utf-8")
                     except urllib.error.HTTPError as exc:
                         body = exc.read().decode("utf-8", errors="replace")[:500]
-                        error = LLMGatewayError(
+                        last_error = LLMGatewayError(
                             f"百炼请求失败（HTTP {exc.code}）：{body}"
                         )
                         if exc.code in _RETRYABLE_HTTP_STATUSES:
@@ -118,7 +119,7 @@ class DashScopeQwenGateway:
                             remaining_models.remove(selected_model)
                             self._log_failover(selection.pool, selected_model, exc.code)
                             continue
-                        raise error from exc
+                        raise last_error from exc
                     except TimeoutError as exc:
                         self.model_health.record_failure(selected_model)
                         if len(remaining_models) > 1:
@@ -141,37 +142,55 @@ class DashScopeQwenGateway:
                                 "百炼响应超时，请稍后查看当前记录。"
                             ) from exc
                         raise LLMGatewayError(f"百炼请求无法连接：{exc}") from exc
+
+                    try:
+                        response_payload = json.loads(raw_body)
+                        if not isinstance(response_payload, dict):
+                            raise LLMGatewayError("百炼返回的响应不是 JSON 对象。")
+                        content = self._extract_content(response_payload)
+                        parsed = self._parse_json_content(content)
+                        if validator is not None:
+                            validator(parsed)
+                    except (json.JSONDecodeError, LLMGatewayError, TypeError, ValueError) as exc:
+                        last_error = (
+                            exc
+                            if isinstance(exc, LLMGatewayError)
+                            else LLMGatewayError(f"模型输出未通过结构校验：{exc}")
+                        )
+                        self.model_health.record_failure(selected_model)
+                        if len(remaining_models) > 1:
+                            failover_count += 1
+                            remaining_models.remove(selected_model)
+                            self._log_failover(
+                                selection.pool,
+                                selected_model,
+                                type(exc).__name__,
+                            )
+                            continue
+                        raise last_error from exc
+
                     self.model_health.record_success(selected_model)
-                    break
-                break
+                    usage = response_payload.get("usage")
+                    record_model_call(
+                        getattr(self.settings, "profile_db_path", "profile.db"),
+                        service="qwen",
+                        model=selected_model,
+                        duration_ms=(time.perf_counter() - upstream_started) * 1000,
+                        input_tokens=_usage_int(usage, "prompt_tokens", "input_tokens"),
+                        output_tokens=_usage_int(usage, "completion_tokens", "output_tokens"),
+                        metadata={
+                            "endpoint": "chat",
+                            "pool": selection.pool,
+                            "failover_count": failover_count,
+                            "queue_wait_ms": round(queue_wait_ms, 3),
+                        },
+                    )
+                    parsed["_selected_model"] = selected_model
+                    parsed["_model_pool"] = selection.pool
+                    return parsed
         except LLMRequestCancelled as exc:
             raise LLMGatewayCancelledError(str(exc)) from exc
-
-        try:
-            response_payload = json.loads(raw_body)
-        except json.JSONDecodeError as exc:
-            raise LLMGatewayError("百炼返回的响应不是合法 JSON。") from exc
-
-        usage = response_payload.get("usage") if isinstance(response_payload, dict) else None
-        record_model_call(
-            getattr(self.settings, "profile_db_path", "profile.db"),
-            service="qwen",
-            model=selected_model,
-            duration_ms=(time.perf_counter() - (upstream_started or started)) * 1000,
-            input_tokens=_usage_int(usage, "prompt_tokens", "input_tokens"),
-            output_tokens=_usage_int(usage, "completion_tokens", "output_tokens"),
-            metadata={
-                "endpoint": "chat",
-                "pool": selection.pool,
-                "failover_count": failover_count,
-                "queue_wait_ms": round(queue_wait_ms, 3),
-            },
-        )
-        content = self._extract_content(response_payload)
-        parsed = self._parse_json_content(content)
-        parsed["_selected_model"] = selected_model
-        parsed["_model_pool"] = selection.pool
-        return parsed
+        raise last_error or LLMGatewayError("当前模型池没有可用模型。")
 
     @staticmethod
     def _log_failover(pool: str, model: str, reason: object) -> None:
