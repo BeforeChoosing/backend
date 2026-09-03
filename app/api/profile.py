@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import re
@@ -23,6 +24,8 @@ from app.schemas.profile import (
     ProfileConversationSnapshot,
     ProfileConversationSnapshotUpsert,
     ProfileOverviewResponse,
+    ProfileMemoryResetRequest,
+    ProfileMemoryResetResponse,
     ProfileProposalRequest,
     ProfileProposalResponse,
 )
@@ -46,6 +49,9 @@ from app.services.profile_exploration_controller import (
 )
 from app.services.profile_store import ProfileStore
 from app.services.user_data import user_data_path
+from app.services.user_memory import reset_user_memory
+from app.services.llm_request_queue import get_llm_request_queue
+from app.version import APP_VERSION
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/profile", tags=["profile"])
@@ -210,6 +216,7 @@ async def create_profile_exploration_message(
             "round_number": request.round_number,
             "star_history": request.star_history,
             "stop_requested": request.stop_requested,
+            "supplement_only": request.supplement_only,
         }
     )
     lock = _exploration_locks.setdefault(cache_key, asyncio.Lock())
@@ -274,6 +281,7 @@ async def stream_profile_exploration_message(
             "round_number": request.round_number,
             "star_history": request.star_history,
             "stop_requested": request.stop_requested,
+            "supplement_only": request.supplement_only,
         }
     )
     lock = _exploration_locks.setdefault(cache_key, asyncio.Lock())
@@ -288,6 +296,10 @@ async def stream_profile_exploration_message(
                         response = ProfileExplorationResponse.model_validate(cached)
                         response = response.model_copy(update={"cache_hit": True})
                         _record_exploration_turn(request, response)
+                        if response.reasoning_content:
+                            yield _stream_event(
+                                "thinking_delta", {"text": response.reasoning_content}
+                            )
                         yield _stream_event("delta", {"text": response.reply})
                         yield _stream_event("done", response.model_dump(mode="json"))
                         return
@@ -306,14 +318,39 @@ async def stream_profile_exploration_message(
                             event_queue.put_nowait, ("delta", {"text": reply_delta})
                         )
 
+                def emit_thinking_delta(raw_delta: str) -> None:
+                    if raw_delta:
+                        loop.call_soon_threadsafe(
+                            event_queue.put_nowait,
+                            ("thinking_delta", {"text": raw_delta}),
+                        )
+
+                def reset_model_delta() -> None:
+                    nonlocal reply_accumulator
+                    reply_accumulator = JsonStringFieldAccumulator("reply")
+                    loop.call_soon_threadsafe(
+                        event_queue.put_nowait, ("reset", {})
+                    )
+
                 def produce() -> None:
                     worker_token = set_request_context(context)
                     try:
+                        agent = _profile_agent()
+                        stream_kwargs = {
+                            "on_delta": emit_model_delta,
+                            "on_reset": reset_model_delta,
+                        }
+                        # Keep compatibility with lightweight integrations
+                        # that implement the pre-thinking callback contract.
+                        if "on_thinking_delta" in inspect.signature(
+                            agent.explore_stream
+                        ).parameters:
+                            stream_kwargs["on_thinking_delta"] = emit_thinking_delta
                         response = apply_exploration_controller(
-                            _profile_agent().explore_stream(
+                            agent.explore_stream(
                                 request,
                                 trace_id,
-                                on_delta=emit_model_delta,
+                                **stream_kwargs,
                             ),
                             request,
                         )
@@ -525,6 +562,45 @@ def get_profile_overview() -> ProfileOverviewResponse:
     return _profile_store().get_profile_overview()
 
 
+@router.delete("/memory", response_model=ProfileMemoryResetResponse)
+def delete_profile_memory(
+    request: ProfileMemoryResetRequest,
+) -> ProfileMemoryResetResponse:
+    """Clear product memory while preserving the account and audit trail."""
+
+    del request  # Literal validation above is the destructive-action confirmation.
+    context = get_request_context()
+    user_id = _formal_user_id()
+    settings = get_settings()
+    queue = get_llm_request_queue(
+        max_concurrency=settings.llm_max_concurrency,
+        max_requests_per_minute=settings.llm_max_requests_per_minute,
+        model_max_concurrency=settings.llm_model_max_concurrency,
+    )
+    cancelled_requests = queue.cancel_all_for_user(user_id)
+    removed_records, removed_files = reset_user_memory(
+        user_data_path(settings.profile_db_path),
+        account_db_path=settings.profile_db_path,
+        user_id=user_id,
+    )
+    _record_business_event(
+        "profile_memory",
+        "profile.memory.reset",
+        {
+            "removed_records": removed_records,
+            "removed_files": removed_files,
+            "cancelled_requests": cancelled_requests,
+            "request_id": context.request_id,
+        },
+    )
+    return ProfileMemoryResetResponse(
+        removed_records=removed_records,
+        removed_files=removed_files,
+        cancelled_requests=cancelled_requests,
+        version=APP_VERSION,
+    )
+
+
 @router.get("/conversations")
 def get_profile_conversations(
     limit: int = Query(default=100, ge=1, le=500),
@@ -655,6 +731,20 @@ def delete_profile_card(card_id: str) -> ProfileCardsResponse:
 async def create_profile_proposal(
     request: ProfileProposalRequest,
 ) -> ProfileProposalResponse:
+    existing_cards = _profile_store().get_profile().cards
+    request = ProfileProposalRequest.model_validate({
+        **request.model_dump(mode="json"),
+        "existing_card_titles": [card.title for card in existing_cards],
+        "existing_cards": [
+            {
+                "id": card.id,
+                "title": card.title,
+                "category": card.category,
+                "description": card.description,
+            }
+            for card in existing_cards
+        ],
+    })
     cache_key = ModelResponseCache.fingerprint(
         {
             "prompt_version": ProfileAgent.PROMPT_VERSION,

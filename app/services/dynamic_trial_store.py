@@ -84,10 +84,14 @@ class DynamicTrialStore:
             raise KeyError(session_id)
         return row
 
-    def create_session(self, task_id: str) -> DynamicTrialSession:
+    def create_session(
+        self,
+        task_id: str,
+        answer: DynamicTrialAnswer | None = None,
+    ) -> DynamicTrialSession:
         session_id = f"dynamic-trial-{uuid4().hex}"
         timestamp = self._now()
-        answer = DynamicTrialAnswer()
+        answer = answer or DynamicTrialAnswer()
         with self._connection() as connection:
             connection.execute(
                 """

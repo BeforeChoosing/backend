@@ -38,12 +38,26 @@ class FakeGateway:
 
 def test_profile_agent_returns_pending_cards():
     response = asyncio.run(ProfileAgent(FakeGateway()).propose(
-        ProfileProposalRequest(experience_text="我在校园项目中访谈用户并根据反馈调整了方案，最后完成了可用原型。"),
+        ProfileProposalRequest(
+            experience_text="我在校园项目中访谈用户并根据反馈调整了方案，最后完成了可用原型。",
+            experience_id="conversation-1",
+        ),
         "trace-test-1234",
     ))
-    assert response.card_proposals[0].title == "用户研究"
+    assert response.card_proposals[0].title == "用户研究能力"
     assert response.card_proposals[0].pending_verification is True
-    assert response.card_proposals[0].source_refs == ["input:experience_text"]
+    assert response.card_proposals[0].experience_id == "conversation-1"
+    assert response.card_proposals[0].source_refs[0] == "experience:conversation-1"
+    assert response.card_proposals[0].evidence_history[0].experience_id == "conversation-1"
+
+
+def test_profile_agent_rejects_an_overlong_card_title_for_model_failover():
+    try:
+        ProfileAgent._normalize_card_title("这是一个非常冗长且不规范的完整句子")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("过长标题应触发模型切换")
 
 
 def test_profile_requests_accept_any_non_empty_user_input():
@@ -81,6 +95,8 @@ class ExplorationGateway:
         assert "不重复此前 assistant 已经给出的引导" in system_prompt
         assert "先用一个短句回应用户刚刚说清的具体行动或结果" in system_prompt
         assert "不像审核表或访谈提纲" in system_prompt
+        assert "严禁虚构数字、成果、身份、职责" in system_prompt
+        assert "suggested_replies" in system_prompt
         assert "校园项目" in user_prompt
         assert "负责访谈" in user_prompt
         return {
@@ -89,6 +105,7 @@ class ExplorationGateway:
             "evidence_found": ["用户明确负责访谈"],
             "evidence_gap": "仍缺少方案取舍的判断依据。",
             "potential_hypotheses": ["可能具备基于证据进行产品取舍的潜能，仍需验证。"],
+            "suggested_replies": ["我可以补充我当时筛选反馈时采用的标准。"],
             "ready_for_proposal": False,
         }
 
@@ -104,6 +121,7 @@ def test_profile_agent_exploration_returns_one_evidence_bound_focus():
 
     assert response.focus_dimension == "decision"
     assert response.evidence_found == ["用户明确负责访谈"]
+    assert response.suggested_replies == ["我可以补充我当时筛选反馈时采用的标准。"]
     assert response.ready_for_proposal is False
 
 
@@ -144,3 +162,24 @@ def test_profile_agent_exploration_preserves_valid_question_reply():
 
     assert response.focus_dimension == "ownership"
     assert response.reply == "你具体做了什么？"
+
+
+def test_profile_agent_exploration_preserves_provider_reasoning_metadata():
+    response = ProfileAgent._normalize_exploration(
+        {
+            "reply": "补充你当时的判断依据。",
+            "focus_dimension": "decision",
+            "evidence_gap": "仍缺少判断依据。",
+            "_selected_model": "qwen3-30b-a3b-thinking-2507",
+            "_thinking_enabled": True,
+            "_reasoning_content": "先核对用户明确说出的行动，再决定追问维度。",
+            "_reasoning_tokens": 17,
+        },
+        "trace-thinking",
+    )
+
+    assert response.thinking_enabled is True
+    assert response.thinking_model == "qwen3-30b-a3b-thinking-2507"
+    assert response.reasoning_content.startswith("先核对")
+    assert response.reasoning_tokens == 17
+    assert response.reasoning_status == "complete"

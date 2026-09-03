@@ -109,11 +109,21 @@ class DynamicTrialCardPlayRound(BaseModel):
     feedback: str = Field(default="", max_length=800)
 
 
+class DynamicTrialPendingAbility(BaseModel):
+    id: str = Field(min_length=1, max_length=160)
+    challenge_id: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=20)
+    description: str = Field(min_length=1, max_length=300)
+    target_skills: list[str] = Field(min_length=1, max_length=3)
+    status: Literal["pending"] = "pending"
+
+
 class DynamicTrialAnswer(BaseModel):
     selected_card_ids: list[str] = Field(default_factory=list, max_length=12)
     card_play_rounds: list[DynamicTrialCardPlayRound] = Field(default_factory=list, max_length=3)
     card_play_current_index: int = Field(default=0, ge=0, le=2)
     card_play_rationale: str = Field(default="", max_length=1200)
+    pending_abilities: list[DynamicTrialPendingAbility] = Field(default_factory=list, max_length=9)
     validation_hypothesis: str = Field(default="", max_length=600)
     card_play_completed: bool = False
     step_answers: dict[str, str] = Field(default_factory=dict)
@@ -129,6 +139,10 @@ class DynamicTrialCoachUsage(BaseModel):
     level: Literal[1, 2, 3]
     prompt: str = Field(max_length=500)
     used_at: datetime
+    model: str | None = Field(default=None, max_length=120)
+    model_pool: str | None = Field(default=None, max_length=120)
+    cache_hit: bool = False
+    generation_mode: Literal["model", "preset_fallback"] = "model"
 
 
 class DynamicTrialCoachRequest(BaseModel):
@@ -138,6 +152,10 @@ class DynamicTrialCoachRequest(BaseModel):
 class DynamicTrialCoachResponse(BaseModel):
     prompt: str
     usage: DynamicTrialCoachUsage
+    model: str | None = Field(default=None, max_length=120)
+    model_pool: str | None = Field(default=None, max_length=120)
+    cache_hit: bool = False
+    generation_mode: Literal["model", "preset_fallback"] = "model"
 
 
 class DynamicTrialSession(BaseModel):

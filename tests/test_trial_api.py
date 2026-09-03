@@ -83,6 +83,19 @@ class FailingReflectionAgent:
         raise LLMGatewayError("测试中的复盘模型故障")
 
 
+class FakeTaskCoachAgent:
+    def __init__(self):
+        self.calls: list[tuple[str, int]] = []
+
+    async def generate(self, task, answer, level):
+        self.calls.append((task.id, level))
+        return {
+            "prompt": "先区分当前现象、可能原因和能够验证原因的证据。",
+            "_selected_model": "qwen3.6-flash",
+            "_model_pool": "text:fast",
+        }
+
+
 def _complete_answer() -> dict:
     return {
         "attributions": [
@@ -194,6 +207,8 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
     monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
     monkeypatch.setattr(trial_api, "_trial_agent", lambda: FakeTrialAgent())
     monkeypatch.setattr(trial_api, "_reflection_agent", lambda: FailingReflectionAgent())
+    coach_agent = FakeTaskCoachAgent()
+    monkeypatch.setattr(trial_api, "_task_coach_agent", lambda: coach_agent)
     client = authenticated_client
 
     task = client.get("/api/v1/trial/catalog/F-01")
@@ -205,12 +220,25 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
         "/api/v1/trial/workbench/sessions",
         json={"task_id": "F-01"},
     )
+    assert len(created.json()["answer"]["pending_abilities"]) == 5
+    assert "方案设计能力" not in {
+        item["title"] for item in created.json()["answer"]["pending_abilities"]
+    }
+    assert all(
+        item["status"] == "pending" and item["title"].endswith("能力")
+        for item in created.json()["answer"]["pending_abilities"]
+    )
     session_id = created.json()["id"]
     coach = client.post(
         f"/api/v1/trial/workbench/sessions/{session_id}/coach",
         json={"level": 2},
     )
     assert coach.status_code == 200
+    assert coach.json()["prompt"] == "先区分当前现象、可能原因和能够验证原因的证据。"
+    assert coach.json()["model"] == "qwen3.6-flash"
+    assert coach.json()["model_pool"] == "text:fast"
+    assert coach.json()["generation_mode"] == "model"
+    assert coach_agent.calls == [("F-01", 2)]
 
     saved = client.put(
         f"/api/v1/trial/workbench/sessions/{session_id}/answer",

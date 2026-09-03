@@ -1,4 +1,5 @@
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -228,6 +229,52 @@ class ProfileStore:
         timestamp = self._now()
         with self._connection() as connection:
             for proposal in cards:
+                proposal = CardProposal.model_validate(proposal.model_dump())
+                merge_target_id = proposal.merge_target_card_id if proposal.resolution == "merge" else None
+                if merge_target_id is None:
+                    normalized_title = re.sub(r"[\s，。！？、,:：；;.!?]", "", proposal.title)
+                    for candidate in self._cards_from_connection(connection):
+                        candidate_title = re.sub(r"[\s，。！？、,:：；;.!?]", "", candidate.title)
+                        if candidate_title == normalized_title:
+                            merge_target_id = candidate.id
+                            break
+                merge_target = None
+                if merge_target_id:
+                    row = connection.execute(
+                        "SELECT card_json FROM profile_cards WHERE id = ?",
+                        (merge_target_id,),
+                    ).fetchone()
+                    if row is not None:
+                        merge_target = self._card_from_row(row)
+
+                if merge_target is not None:
+                    history = [*merge_target.evidence_history, *proposal.evidence_history]
+                    unique_history = []
+                    seen_evidence: set[tuple[str, str]] = set()
+                    for evidence in history:
+                        key = (evidence.experience_id, evidence.evidence_quote)
+                        if key not in seen_evidence:
+                            unique_history.append(evidence)
+                            seen_evidence.add(key)
+                    detail = merge_target.detail
+                    if proposal.detail not in detail:
+                        detail = f"{detail}\n{proposal.detail}"[:600]
+                    proposal = CardProposal.model_validate({
+                        **merge_target.model_dump(exclude={"status", "source_trace_id", "created_at", "updated_at"}),
+                        "id": merge_target.id,
+                        "detail": detail,
+                        "evidence_quote": proposal.evidence_quote,
+                        "evidence_type": proposal.evidence_type,
+                        "claim_level": proposal.claim_level,
+                        "source_refs": list(dict.fromkeys([
+                            *merge_target.source_refs,
+                            *proposal.source_refs,
+                        ]))[:10],
+                        "experience_id": proposal.experience_id,
+                        "evidence_history": [item.model_dump() for item in unique_history][-30:],
+                        "resolution": "new",
+                        "merge_target_card_id": None,
+                    })
                 existing = connection.execute(
                     "SELECT created_at, source_trace_id FROM profile_cards WHERE id = ?",
                     (proposal.id,),

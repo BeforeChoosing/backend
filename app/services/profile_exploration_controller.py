@@ -194,9 +194,19 @@ def assess_exploration(request: ProfileExplorationRequest) -> ExplorationCoverag
     stop_requested = request.stop_requested or any(
         term in message.content for message in request.messages if message.role == "user" for term in _STOP_TERMS
     )
-    next_action = "summarize" if stop_requested or round_number >= 4 else "ask"
+    next_action = (
+        "summarize"
+        if request.supplement_only or stop_requested or round_number >= 4
+        else "ask"
+    )
     finalization_reason = (
-        "用户选择停止补充" if stop_requested else "已完成四个 STAR 维度的追问" if round_number >= 4 else None
+        "四轮后继续补充当前经历"
+        if request.supplement_only
+        else "用户选择停止补充"
+        if stop_requested
+        else "已完成四个 STAR 维度的追问"
+        if round_number >= 4
+        else None
     )
     return ExplorationCoverage(
         status=status,
@@ -221,6 +231,12 @@ def apply_exploration_controller(
         gap = "核心证据已覆盖，可以整理候选能力卡；确认仍由你决定。"
     else:
         gap = _GAP_BY_FOCUS[coverage.next_focus]
+    fallback_suggestions = {
+        "S": "我可以补充一下当时的背景和遇到的具体情况。",
+        "T": "我可以说明当时要完成的目标，以及我具体负责的部分。",
+        "A": "我可以继续讲讲我采取的行动和做出取舍的原因。",
+        "R": "我可以补充最后发生的结果，以及我是如何判断结果的。",
+    }
     return response.model_copy(
         update={
             "focus_dimension": coverage.next_focus,
@@ -231,5 +247,7 @@ def apply_exploration_controller(
             "round_number": coverage.round_number,
             "next_action": coverage.next_action,
             "finalization_reason": coverage.finalization_reason,
+            "suggested_replies": response.suggested_replies
+            or [fallback_suggestions[coverage.star_dimension]],
         }
     )

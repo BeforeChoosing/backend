@@ -95,9 +95,9 @@ class DashScopeVisionGateway:
         remaining_models = list(self.model_health.available(selection.candidates))
         context = get_request_context()
         queue = get_llm_request_queue(
-            max_concurrency=getattr(self.settings, "llm_max_concurrency", 6),
+            max_concurrency=getattr(self.settings, "llm_max_concurrency", 12),
             max_requests_per_minute=getattr(
-                self.settings, "llm_max_requests_per_minute", 60
+                self.settings, "llm_max_requests_per_minute", 180
             ),
             model_max_concurrency=getattr(
                 self.settings, "llm_model_max_concurrency", 1
@@ -132,6 +132,9 @@ class DashScopeVisionGateway:
                         "messages": messages,
                         "temperature": 0.1,
                         "response_format": {"type": "json_object"},
+                        # Keep structured multimodal extraction compatible
+                        # with Qwen models whose thinking mode defaults on.
+                        "enable_thinking": False,
                     }
                     request = urllib.request.Request(
                         self.settings.dashscope_base_url,

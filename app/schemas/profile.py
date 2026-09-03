@@ -26,8 +26,9 @@ ExplorationFocus = Literal[
     "evidence",
 ]
 ExplorationCoverageStatus = Literal["missing", "weak", "sufficient", "confirmed"]
-ModelTier = Literal["fast", "balanced", "reasoning"]
+ModelTier = Literal["fast", "balanced", "comprehensive", "thinking", "reasoning"]
 StarDimension = Literal["S", "T", "A", "R"]
+ReasoningStatus = Literal["disabled", "streaming", "complete", "unavailable"]
 
 
 class ProfileConversationMessage(BaseModel):
@@ -55,6 +56,10 @@ class ProfileExplorationRequest(BaseModel):
     round_number: int = Field(default=1, ge=1, le=4)
     star_history: list[StarDimension] = Field(default_factory=list, max_length=4)
     stop_requested: bool = False
+    # Once all four STAR prompts are complete, users can still add facts to
+    # the same experience. The agent must acknowledge those facts without
+    # starting a fifth guided question.
+    supplement_only: bool = False
 
 
 class ProfileExplorationResponse(BaseModel):
@@ -64,6 +69,7 @@ class ProfileExplorationResponse(BaseModel):
     evidence_found: list[str] = Field(default_factory=list, max_length=5)
     evidence_gap: str = Field(min_length=1, max_length=300)
     potential_hypotheses: list[str] = Field(default_factory=list, max_length=3)
+    suggested_replies: list[str] = Field(default_factory=list, max_length=3)
     ready_for_proposal: bool = False
     coverage: dict[ExplorationFocus, ExplorationCoverageStatus] = Field(default_factory=dict)
     model: str | None = Field(default=None, max_length=120)
@@ -74,6 +80,14 @@ class ProfileExplorationResponse(BaseModel):
     round_number: int = Field(default=1, ge=1, le=4)
     next_action: Literal["ask", "summarize"] = "ask"
     finalization_reason: str | None = Field(default=None, max_length=160)
+    # Thinking output is provider-returned reasoning_content only.  It is
+    # persisted with the turn so the client can render it on reload; it is not
+    # included in ordinary model prompts or operational logs.
+    reasoning_content: str = Field(default="", max_length=24000)
+    thinking_enabled: bool = False
+    thinking_model: str | None = Field(default=None, max_length=120)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
+    reasoning_status: ReasoningStatus = "disabled"
 
 
 class ProfileConversationSnapshotMessage(BaseModel):
@@ -82,8 +96,15 @@ class ProfileConversationSnapshotMessage(BaseModel):
     content: str = Field(min_length=1, max_length=1000)
     timestamp: str = Field(default="", max_length=40)
     detected_signals: list[str] = Field(default_factory=list, max_length=5)
+    suggested_replies: list[str] = Field(default_factory=list, max_length=3)
     model: str | None = Field(default=None, max_length=120)
     cache_hit: bool | None = None
+    star_dimension: StarDimension | None = None
+    reasoning_content: str = Field(default="", max_length=24000)
+    thinking_enabled: bool = False
+    thinking_model: str | None = Field(default=None, max_length=120)
+    reasoning_tokens: int | None = Field(default=None, ge=0)
+    reasoning_status: ReasoningStatus = "disabled"
 
 
 class ProfileConversationMaterial(BaseModel):
@@ -111,8 +132,17 @@ class ProfileConversationSnapshot(ProfileConversationSnapshotUpsert):
 
 class ProfileProposalRequest(BaseModel):
     experience_text: str = Field(min_length=1, max_length=12000)
+    experience_id: str | None = Field(default=None, min_length=1, max_length=120)
     target_role: str | None = Field(default=None, max_length=120)
     existing_card_titles: list[str] = Field(default_factory=list, max_length=20)
+    existing_cards: list["ExistingProfileCard"] = Field(default_factory=list, max_length=20)
+
+
+class ExistingProfileCard(BaseModel):
+    id: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=80)
+    category: CardCategory
+    description: str = Field(min_length=1, max_length=240)
 
 
 class MaterialExtractResponse(BaseModel):
@@ -176,6 +206,17 @@ class CardProposal(BaseModel):
     next_verification: str = Field(min_length=1, max_length=240)
     match_reason: str = Field(min_length=1, max_length=300)
     workplace_application: str = Field(min_length=1, max_length=300)
+    experience_id: str | None = Field(default=None, max_length=120)
+    resolution: Literal["new", "merge"] = "new"
+    merge_target_card_id: str | None = Field(default=None, max_length=120)
+    evidence_history: list["AbilityEvidenceEntry"] = Field(default_factory=list, max_length=30)
+
+
+class AbilityEvidenceEntry(BaseModel):
+    experience_id: str = Field(min_length=1, max_length=120)
+    evidence_quote: str = Field(min_length=1, max_length=500)
+    source_refs: list[str] = Field(default_factory=list, max_length=10)
+    trace_id: str | None = Field(default=None, max_length=100)
 
 
 class ProfileProposalResponse(BaseModel):
@@ -228,3 +269,15 @@ class ProfileOverviewResponse(ProfileCardsResponse):
     evidence: list[ProfileEvidenceRecord] = Field(default_factory=list)
     completed_task_ids: list[str] = Field(default_factory=list)
     notice: str = "能力卡来自用户确认，任务证据来自已提交的试路评价。"
+
+
+class ProfileMemoryResetRequest(BaseModel):
+    confirmation: Literal["CLEAR_ALL_MEMORY"]
+
+
+class ProfileMemoryResetResponse(BaseModel):
+    cleared: Literal[True] = True
+    removed_records: int = Field(ge=0)
+    removed_files: int = Field(ge=0)
+    cancelled_requests: int = Field(ge=0)
+    version: str

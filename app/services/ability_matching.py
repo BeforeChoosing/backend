@@ -1,6 +1,7 @@
 from app.schemas.profile import ProfileCard
 from app.schemas.task_catalog import (
     DynamicTrialCardPlayRound,
+    DynamicTrialPendingAbility,
     TrialAbilityChallenge,
 )
 
@@ -56,10 +57,12 @@ def card_skill_score(card: ProfileCard, target_skills: list[str]) -> float:
 def evaluate_card_play_round(
     challenge: TrialAbilityChallenge,
     selected_cards: list[ProfileCard],
+    pending_abilities: list[DynamicTrialPendingAbility] | None = None,
 ) -> DynamicTrialCardPlayRound:
-    if not selected_cards:
+    pending_abilities = pending_abilities or []
+    if not selected_cards and not pending_abilities:
         raise ValueError("每个能力应用挑战至少需要选择一张能力卡。")
-    if len(selected_cards) > challenge.max_cards:
+    if len(selected_cards) + len(pending_abilities) > challenge.max_cards:
         raise ValueError(f"每个能力应用挑战最多选择 {challenge.max_cards} 张能力卡。")
 
     scored_cards = [
@@ -76,9 +79,44 @@ def evaluate_card_play_round(
         )
     ]
     direct_match = any(score >= 6 for _, score in scored_cards)
+    pending_matched_skills = [
+        skill
+        for skill in challenge.target_skills
+        if any(skill in ability.target_skills for ability in pending_abilities)
+    ]
+    matched_skills = list(dict.fromkeys([*matched_skills, *pending_matched_skills]))
+    pending_ids = [ability.id for ability in pending_abilities]
+    matched_pending_ids = [
+        ability.id
+        for ability in pending_abilities
+        if any(skill in challenge.target_skills for skill in ability.target_skills)
+    ]
 
     skill_text = "、".join(challenge.target_skills)
-    if direct_match or len(matched_cards) >= 2:
+    if matched_pending_ids and not selected_cards:
+        match_level = "partial"
+        matched_pending_titles = "、".join(
+            ability.title
+            for ability in pending_abilities
+            if ability.id in matched_pending_ids
+        )
+        feedback = (
+            f"现有能力卡与“{skill_text}”没有明确对应。"
+            f"本轮将把“{matched_pending_titles}”作为待验证能力，"
+            "通过任务表现补充新的行为证据。"
+        )
+    elif matched_pending_ids:
+        match_level = "partial"
+        matched_pending_titles = "、".join(
+            ability.title
+            for ability in pending_abilities
+            if ability.id in matched_pending_ids
+        )
+        feedback = (
+            "当前选择的已有能力可以支持部分任务，但仍不足以覆盖核心要求。"
+            f"本轮将同时验证“{matched_pending_titles}”。"
+        )
+    elif direct_match or len(matched_cards) >= 2:
         match_level = "high"
         feedback = (
             f"所选能力与“{skill_text}”直接对应，可用于本轮任务要求。"
@@ -99,9 +137,9 @@ def evaluate_card_play_round(
 
     return DynamicTrialCardPlayRound(
         challenge_id=challenge.id,
-        selected_card_ids=[card.id for card in selected_cards],
+        selected_card_ids=[*[card.id for card in selected_cards], *pending_ids],
         match_level=match_level,
-        matched_card_ids=[card.id for card in matched_cards],
+        matched_card_ids=[*[card.id for card in matched_cards], *matched_pending_ids],
         matched_skills=matched_skills,
         feedback=feedback,
     )

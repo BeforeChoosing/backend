@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 
 from app.agents.reflection_agent import ReflectionAgent
+from app.agents.task_coach_agent import TaskCoachAgent
 from app.agents.trial_agent import TrialAgent
 from app.config import get_settings
 from app.schemas.trial import (
@@ -27,6 +28,7 @@ from app.schemas.task_catalog import (
     DynamicTrialCoachRequest,
     DynamicTrialCoachResponse,
     DynamicTrialCoachUsage,
+    DynamicTrialPendingAbility,
     DynamicTrialSession,
     DynamicTrialSessionCreateRequest,
     TrialTaskDefinition,
@@ -39,6 +41,7 @@ from app.services.ability_matching import evaluate_card_play_round
 from app.services.dynamic_trial_store import DynamicTrialStore
 from app.services.model_response_cache import ModelResponseCache
 from app.services.profile_store import ProfileStore
+from app.services.pending_ability_catalog import generate_pending_abilities
 from app.services.user_data import user_data_path
 from app.services.trial_store import TrialStore
 from app.services.task_selector import recommend_trial_task
@@ -64,6 +67,10 @@ def _trial_agent() -> TrialAgent:
 
 def _reflection_agent() -> ReflectionAgent:
     return ReflectionAgent(DashScopeQwenGateway(get_settings()))
+
+
+def _task_coach_agent() -> TaskCoachAgent:
+    return TaskCoachAgent(DashScopeQwenGateway(get_settings()))
 
 
 def _profile_store() -> ProfileStore:
@@ -160,8 +167,13 @@ def create_trial_recommendation(
 def create_dynamic_trial_session(
     request: DynamicTrialSessionCreateRequest,
 ) -> DynamicTrialSession:
-    get_task_definition(request.task_id)
-    session = _dynamic_trial_store().create_session(request.task_id)
+    task = get_task_definition(request.task_id)
+    confirmed_cards = _profile_store().get_profile().cards
+    pending_abilities = generate_pending_abilities(task, confirmed_cards)
+    session = _dynamic_trial_store().create_session(
+        request.task_id,
+        DynamicTrialAnswer(pending_abilities=pending_abilities),
+    )
     _record_trial_event(
         "trial.session.create",
         {"session_id": session.id, "task_id": session.task_id},
@@ -182,6 +194,9 @@ def save_dynamic_trial_answer(
     try:
         session = _get_dynamic_session(session_id)
         profile_store = _profile_store()
+        # Pending abilities are generated from the immutable task definition.
+        # Never let a client invent or rewrite them when saving an answer.
+        request.answer.pending_abilities = session.answer.pending_abilities
         _normalize_card_play(session.task_id, request.answer, profile_store)
         if request.answer.card_play_completed:
             _validate_card_play(session.task_id, request.answer, profile_store)
@@ -418,17 +433,73 @@ async def _evaluate_dynamic_cached(
     "/workbench/sessions/{session_id}/coach",
     response_model=DynamicTrialCoachResponse,
 )
-def use_dynamic_trial_coach(
+async def use_dynamic_trial_coach(
     session_id: str,
     request: DynamicTrialCoachRequest,
 ) -> DynamicTrialCoachResponse:
     session = _get_dynamic_session(session_id)
     task = get_task_definition(session.task_id)
-    prompt = task.coach_prompts[request.level - 1]
+    cache_key = ModelResponseCache.fingerprint(
+        {
+            "prompt_version": TaskCoachAgent.PROMPT_VERSION,
+            "model_pool": "fast",
+            "task_id": task.id,
+            "level": request.level,
+            "answer": _dynamic_answer_cache_payload(session.answer),
+        }
+    )
+    namespace = "dynamic-trial-coach"
+    lock = _model_call_locks.setdefault((namespace, cache_key), asyncio.Lock())
+    prompt = ""
+    model: str | None = None
+    model_pool: str | None = None
+    cache_hit = False
+    generation_mode = "model"
+    async with lock:
+        cached = _model_cache().get(namespace, cache_key)
+        if cached is not None:
+            cached_prompt = cached.get("prompt") if isinstance(cached, dict) else None
+            if isinstance(cached_prompt, str) and cached_prompt.strip():
+                prompt = cached_prompt.strip()[:500]
+                model = str(cached.get("model") or "")[:120] or None
+                model_pool = str(cached.get("model_pool") or "")[:120] or None
+                cache_hit = True
+        if not prompt:
+            try:
+                raw = await _task_coach_agent().generate(
+                    task,
+                    session.answer,
+                    request.level,
+                )
+                prompt = str(raw["prompt"]).strip()[:500]
+                model = str(raw.get("_selected_model") or "")[:120] or None
+                model_pool = str(raw.get("_model_pool") or "")[:120] or None
+                _model_cache().set(
+                    namespace,
+                    cache_key,
+                    {
+                        "prompt": prompt,
+                        "model": model,
+                        "model_pool": model_pool,
+                    },
+                )
+            except (LLMGatewayError, ValueError, TypeError) as exc:
+                logger.warning(
+                    "task coach degraded task_id=%s level=%s reason=%s",
+                    task.id,
+                    request.level,
+                    exc,
+                )
+                prompt = task.coach_prompts[request.level - 1]
+                generation_mode = "preset_fallback"
     usage = DynamicTrialCoachUsage(
         level=request.level,
         prompt=prompt,
         used_at=datetime.now(timezone.utc),
+        model=model,
+        model_pool=model_pool,
+        cache_hit=cache_hit,
+        generation_mode=generation_mode,
     )
     try:
         session = _dynamic_trial_store().record_coach_usage(session_id, usage)
@@ -436,9 +507,24 @@ def use_dynamic_trial_coach(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     _record_trial_event(
         "trial.coach.use",
-        {"session_id": session_id, "task_id": task.id, "level": request.level},
+        {
+            "session_id": session_id,
+            "task_id": task.id,
+            "level": request.level,
+            "model": model,
+            "model_pool": model_pool,
+            "cache_hit": cache_hit,
+            "generation_mode": generation_mode,
+        },
     )
-    return DynamicTrialCoachResponse(prompt=prompt, usage=usage)
+    return DynamicTrialCoachResponse(
+        prompt=prompt,
+        usage=usage,
+        model=model,
+        model_pool=model_pool,
+        cache_hit=cache_hit,
+        generation_mode=generation_mode,
+    )
 
 
 def _get_session(session_id: str) -> TrialSession:
@@ -491,14 +577,19 @@ def _normalize_card_play(
         selected_ids = list(dict.fromkeys(item.selected_card_ids))
         if len(selected_ids) != len(item.selected_card_ids):
             raise HTTPException(status_code=422, detail="同一挑战不能重复选择能力卡。")
-        cards = profile_store.get_cards_by_ids(selected_ids)
-        if len(cards) != len(selected_ids):
-            raise HTTPException(status_code=422, detail="能力出牌只能使用已确认的能力卡。")
+        # The five pending candidates belong to the task as a whole. Users may
+        # choose any of them for each challenge; relevance is evaluated below.
+        pending_by_id = {ability.id: ability for ability in answer.pending_abilities}
+        selected_pending = [pending_by_id[item_id] for item_id in selected_ids if item_id in pending_by_id]
+        confirmed_ids = [item_id for item_id in selected_ids if item_id not in pending_by_id]
+        cards = profile_store.get_cards_by_ids(confirmed_ids)
+        if len(cards) != len(confirmed_ids) or len(confirmed_ids) + len(selected_pending) != len(selected_ids):
+            raise HTTPException(status_code=422, detail="能力出牌包含无效或不属于当前任务的能力卡。")
         cards_by_id = {card.id: card for card in cards}
-        ordered_cards = [cards_by_id[card_id] for card_id in selected_ids]
+        ordered_cards = [cards_by_id[card_id] for card_id in confirmed_ids]
         try:
             normalized_rounds.append(
-                evaluate_card_play_round(challenge, ordered_cards)
+                evaluate_card_play_round(challenge, ordered_cards, selected_pending)
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -526,10 +617,10 @@ def _validate_card_play(
             raise HTTPException(status_code=422, detail="请先完成全部三个能力应用挑战。")
         if any(item.match_level is None or not item.feedback for item in answer.card_play_rounds):
             raise HTTPException(status_code=422, detail="能力应用挑战缺少匹配反馈。")
-        if len(profile_store.get_cards_by_ids(answer.selected_card_ids)) != len(
-            answer.selected_card_ids
-        ):
-            raise HTTPException(status_code=422, detail="能力出牌只能使用已确认的能力卡。")
+        pending_ids = {ability.id for ability in answer.pending_abilities}
+        confirmed_ids = [item_id for item_id in answer.selected_card_ids if item_id not in pending_ids]
+        if len(profile_store.get_cards_by_ids(confirmed_ids)) != len(confirmed_ids):
+            raise HTTPException(status_code=422, detail="能力出牌包含无效能力卡。")
         return
 
     selected_ids = list(dict.fromkeys(answer.selected_card_ids))

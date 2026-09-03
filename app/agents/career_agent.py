@@ -107,6 +107,15 @@ class CareerAgent:
                 },
                 ensure_ascii=False,
             ),
+            validator=lambda payload: self._normalize(
+                payload,
+                cards,
+                retrieved,
+                card_ids,
+                citation_ids,
+                next_task,
+                next_task_reason,
+            ),
         )
         return self._normalize(
             raw,

@@ -57,6 +57,12 @@ QWEN_FAST_MODEL=qwen3.6-flash
 QWEN_FAST_MODELS=qwen3.6-flash,qwen3.7-flash,qwen3.8-flash
 QWEN_BALANCED_MODELS=qwen3.6-plus,qwen3.7-plus,qwen3.5-plus
 QWEN_REASONING_MODELS=qwen3.8-max,qwen3.7-max,qwen3-max
+QWEN_COMPREHENSIVE_MODELS=qwen3.8-max,qwen3.7-max,qwen3-max
+QWEN_THINKING_MODELS=qwen3-30b-a3b-thinking-2507,qwen3-235b-a22b-thinking-2507
+QWEN_THINKING_FALLBACK_MODELS=qwen3.7-plus,qwen3.7-max,qwen3.8-max
+THINKING_BUDGET=4096
+THINKING_REQUEST_TIMEOUT=240
+THINKING_PRESERVE_HISTORY=false
 TRIAL_BASE_MODEL=qwen3.6-plus
 TRIAL_SFT_MODEL=
 TRIAL_VERIFIER_MODEL=
@@ -85,17 +91,21 @@ RAG_RRF_K=20
 RAG_RRF_ANCHOR_LEXICAL_WEIGHT=0
 RAG_MMR_RELEVANCE_WEIGHT=0.65
 LLM_REQUEST_TIMEOUT=90
-LLM_MAX_CONCURRENCY=6
+LLM_MAX_CONCURRENCY=12
 LLM_MODEL_MAX_CONCURRENCY=1
 LLM_MODEL_FAILURE_THRESHOLD=2
 LLM_MODEL_COOLDOWN_SECONDS=60
-LLM_MAX_REQUESTS_PER_MINUTE=60
+LLM_MAX_REQUESTS_PER_MINUTE=180
 PROFILE_DB_PATH=profile.db
 AUTH_SESSION_TTL_HOURS=720
 KNOWLEDGE_DIR=knowledge/public
 KNOWLEDGE_DB_PATH=knowledge.db
 CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ```
+
+成长陪伴 Agent 提供四档响应：`快速`、`适中`、`全面`（兼容旧版“思考”档）和`思考`。每档从对应模型池中选择当前可用模型；思考档使用 DashScope 的 `enable_thinking` 流式接口，前端会实时显示模型返回的 `reasoning_content`，并在对话历史中保存该字段。它不会写入普通运行日志，也不会自动拼接回下一轮提示词。由于思考模型不支持 JSON mode，网关在需要结构化响应时会用快速模型做一次 JSON 修复，修复请求同样受全局队列与速率限制。
+
+模型调用记录仍只保存模型、耗时、token 用量、队列等待、思考开关和修复模型等运营字段；不会记录用户原文、附件或思维链。知识库请求会额外输出 `knowledge_retrieval_completed` / `knowledge_retrieval_failed` 结构化日志，包含检索模式、查询数量、候选/命中数量、向量与重排是否使用、回退标记和耗时，方便按请求编号定位问题。
 
 `BAILIAN_EMBEDDING_URL` 和 `BAILIAN_RERANK_URL` 留空时，会自动沿用 `DASHSCOPE_BASE_URL` 的工作空间 Host；使用百炼专属工作空间时只需填写聊天地址和密钥。
 
