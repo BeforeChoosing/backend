@@ -69,3 +69,20 @@ def test_pending_ability_can_fill_a_real_profile_gap() -> None:
     assert result.selected_card_ids == [pending.id]
     assert result.matched_card_ids == [pending.id]
     assert "待验证能力" in result.feedback
+
+
+def test_pending_candidate_for_another_challenge_is_selectable_but_not_a_match() -> None:
+    challenge = get_task_definition("F-01").ability_challenges[0]
+    pending = DynamicTrialPendingAbility(
+        id="pending:F-01:unrelated",
+        challenge_id="F-01-C03",
+        title="数据驱动判断能力",
+        description="根据任务生成的另一张候选能力。",
+        target_skills=["数据驱动"],
+    )
+
+    result = evaluate_card_play_round(challenge, [], [pending])
+
+    assert result.match_level == "low"
+    assert result.selected_card_ids == [pending.id]
+    assert result.matched_card_ids == []

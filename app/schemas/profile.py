@@ -64,6 +64,7 @@ class ProfileExplorationResponse(BaseModel):
     evidence_found: list[str] = Field(default_factory=list, max_length=5)
     evidence_gap: str = Field(min_length=1, max_length=300)
     potential_hypotheses: list[str] = Field(default_factory=list, max_length=3)
+    suggested_replies: list[str] = Field(default_factory=list, max_length=3)
     ready_for_proposal: bool = False
     coverage: dict[ExplorationFocus, ExplorationCoverageStatus] = Field(default_factory=dict)
     model: str | None = Field(default=None, max_length=120)
@@ -82,6 +83,7 @@ class ProfileConversationSnapshotMessage(BaseModel):
     content: str = Field(min_length=1, max_length=1000)
     timestamp: str = Field(default="", max_length=40)
     detected_signals: list[str] = Field(default_factory=list, max_length=5)
+    suggested_replies: list[str] = Field(default_factory=list, max_length=3)
     model: str | None = Field(default=None, max_length=120)
     cache_hit: bool | None = None
     star_dimension: StarDimension | None = None

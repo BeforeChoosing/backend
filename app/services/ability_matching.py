@@ -86,20 +86,35 @@ def evaluate_card_play_round(
     ]
     matched_skills = list(dict.fromkeys([*matched_skills, *pending_matched_skills]))
     pending_ids = [ability.id for ability in pending_abilities]
+    matched_pending_ids = [
+        ability.id
+        for ability in pending_abilities
+        if any(skill in challenge.target_skills for skill in ability.target_skills)
+    ]
 
     skill_text = "、".join(challenge.target_skills)
-    if pending_abilities and not selected_cards:
+    if matched_pending_ids and not selected_cards:
         match_level = "partial"
+        matched_pending_titles = "、".join(
+            ability.title
+            for ability in pending_abilities
+            if ability.id in matched_pending_ids
+        )
         feedback = (
             f"现有能力卡与“{skill_text}”没有明确对应。"
-            f"本轮将把“{'、'.join(ability.title for ability in pending_abilities)}”作为待验证能力，"
+            f"本轮将把“{matched_pending_titles}”作为待验证能力，"
             "通过任务表现补充新的行为证据。"
         )
-    elif pending_abilities:
+    elif matched_pending_ids:
         match_level = "partial"
+        matched_pending_titles = "、".join(
+            ability.title
+            for ability in pending_abilities
+            if ability.id in matched_pending_ids
+        )
         feedback = (
             "当前选择的已有能力可以支持部分任务，但仍不足以覆盖核心要求。"
-            f"本轮将同时验证“{'、'.join(ability.title for ability in pending_abilities)}”。"
+            f"本轮将同时验证“{matched_pending_titles}”。"
         )
     elif direct_match or len(matched_cards) >= 2:
         match_level = "high"
@@ -124,7 +139,7 @@ def evaluate_card_play_round(
         challenge_id=challenge.id,
         selected_card_ids=[*[card.id for card in selected_cards], *pending_ids],
         match_level=match_level,
-        matched_card_ids=[*[card.id for card in matched_cards], *pending_ids],
+        matched_card_ids=[*[card.id for card in matched_cards], *matched_pending_ids],
         matched_skills=matched_skills,
         feedback=feedback,
     )

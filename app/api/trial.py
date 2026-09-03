@@ -41,6 +41,7 @@ from app.services.ability_matching import evaluate_card_play_round
 from app.services.dynamic_trial_store import DynamicTrialStore
 from app.services.model_response_cache import ModelResponseCache
 from app.services.profile_store import ProfileStore
+from app.services.pending_ability_catalog import generate_pending_abilities
 from app.services.user_data import user_data_path
 from app.services.trial_store import TrialStore
 from app.services.task_selector import recommend_trial_task
@@ -168,49 +169,7 @@ def create_dynamic_trial_session(
 ) -> DynamicTrialSession:
     task = get_task_definition(request.task_id)
     confirmed_cards = _profile_store().get_profile().cards
-    title_by_skill = {
-        "用户洞察": "用户洞察能力",
-        "数据驱动": "数据驱动判断能力",
-        "模型评测": "模型评测能力",
-        "商业意识": "商业判断能力",
-        "方案与交互": "方案设计能力",
-        "AI产品化": "AI场景判断能力",
-        "优先级判断": "优先级判断能力",
-        "跨团队落地": "跨团队协作能力",
-        "创新趋势": "AI趋势判断能力",
-    }
-    category_by_skill = {
-        "用户洞察": "洞察分析",
-        "数据驱动": "数据驱动",
-        "方案与交互": "产品策略",
-        "AI产品化": "技术落地",
-        "跨团队落地": "协作沟通",
-    }
-
-    def has_confirmed_evidence(skill: str) -> bool:
-        expected_title = title_by_skill.get(skill, f"{skill}能力")
-        return any(
-            skill in card.title
-            or card.title in expected_title
-            or card.category == category_by_skill.get(skill)
-            for card in confirmed_cards
-        )
-
-    pending_abilities = [
-        DynamicTrialPendingAbility(
-            id=f"pending:{challenge.id}:{index + 1}",
-            challenge_id=challenge.id,
-            title=title_by_skill.get(skill, f"{skill}能力"),
-            description=(
-                f"当前画像中还没有足够证据证明这项能力。"
-                f"本轮将结合任务表现验证：{challenge.reference_behavior}"
-            )[:300],
-            target_skills=[skill],
-        )
-        for challenge in task.ability_challenges
-        for index, skill in enumerate(challenge.target_skills[:1])
-        if not has_confirmed_evidence(skill)
-    ][:3]
+    pending_abilities = generate_pending_abilities(task, confirmed_cards)
     session = _dynamic_trial_store().create_session(
         request.task_id,
         DynamicTrialAnswer(pending_abilities=pending_abilities),
@@ -618,16 +577,14 @@ def _normalize_card_play(
         selected_ids = list(dict.fromkeys(item.selected_card_ids))
         if len(selected_ids) != len(item.selected_card_ids):
             raise HTTPException(status_code=422, detail="同一挑战不能重复选择能力卡。")
-        pending_by_id = {
-            ability.id: ability
-            for ability in answer.pending_abilities
-            if ability.challenge_id == challenge.id
-        }
+        # The five pending candidates belong to the task as a whole. Users may
+        # choose any of them for each challenge; relevance is evaluated below.
+        pending_by_id = {ability.id: ability for ability in answer.pending_abilities}
         selected_pending = [pending_by_id[item_id] for item_id in selected_ids if item_id in pending_by_id]
         confirmed_ids = [item_id for item_id in selected_ids if item_id not in pending_by_id]
         cards = profile_store.get_cards_by_ids(confirmed_ids)
         if len(cards) != len(confirmed_ids) or len(confirmed_ids) + len(selected_pending) != len(selected_ids):
-            raise HTTPException(status_code=422, detail="能力出牌包含无效或不属于当前挑战的能力卡。")
+            raise HTTPException(status_code=422, detail="能力出牌包含无效或不属于当前任务的能力卡。")
         cards_by_id = {card.id: card for card in cards}
         ordered_cards = [cards_by_id[card_id] for card_id in confirmed_ids]
         try:

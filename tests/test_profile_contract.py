@@ -95,6 +95,8 @@ class ExplorationGateway:
         assert "不重复此前 assistant 已经给出的引导" in system_prompt
         assert "先用一个短句回应用户刚刚说清的具体行动或结果" in system_prompt
         assert "不像审核表或访谈提纲" in system_prompt
+        assert "严禁虚构数字、成果、身份、职责" in system_prompt
+        assert "suggested_replies" in system_prompt
         assert "校园项目" in user_prompt
         assert "负责访谈" in user_prompt
         return {
@@ -103,6 +105,7 @@ class ExplorationGateway:
             "evidence_found": ["用户明确负责访谈"],
             "evidence_gap": "仍缺少方案取舍的判断依据。",
             "potential_hypotheses": ["可能具备基于证据进行产品取舍的潜能，仍需验证。"],
+            "suggested_replies": ["我可以补充我当时筛选反馈时采用的标准。"],
             "ready_for_proposal": False,
         }
 
@@ -118,6 +121,7 @@ def test_profile_agent_exploration_returns_one_evidence_bound_focus():
 
     assert response.focus_dimension == "decision"
     assert response.evidence_found == ["用户明确负责访谈"]
+    assert response.suggested_replies == ["我可以补充我当时筛选反馈时采用的标准。"]
     assert response.ready_for_proposal is False
 
 

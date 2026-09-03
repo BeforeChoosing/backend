@@ -109,6 +109,27 @@ def test_controller_advances_star_turns_in_order_and_summarizes_on_fourth():
         assert assessment.next_action == ("ask" if round_number < 4 else "summarize")
 
 
+def test_controller_adds_non_fabricating_reply_direction_when_model_omits_it():
+    request = ProfileExplorationRequest(
+        experience_text="我参与过一个校园项目。",
+        round_number=2,
+        star_history=["S"],
+    )
+    response = ProfileExplorationResponse(
+        trace_id="trace-suggestion-fallback",
+        reply="接下来可以补充当时的目标。",
+        focus_dimension="ownership",
+        evidence_gap="仍缺少目标。",
+    )
+
+    controlled = apply_exploration_controller(response, request)
+
+    assert controlled.star_dimension == "T"
+    assert controlled.suggested_replies == [
+        "我可以说明当时要完成的目标，以及我具体负责的部分。"
+    ]
+
+
 def test_controller_stop_intent_summarizes_without_answer_quality_gate():
     request = ProfileExplorationRequest(
         experience_text="我做过一个项目。",

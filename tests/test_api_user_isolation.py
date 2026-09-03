@@ -139,7 +139,13 @@ def test_conversation_snapshots_sync_and_remain_account_scoped(api):
         'title': '校园项目访谈',
         'messages': [
             {'id': 'message-1', 'role': 'user', 'content': '我访谈了六位同学。'},
-            {'id': 'message-2', 'role': 'ai', 'content': '你如何选择访谈对象？'},
+            {
+                'id': 'message-2',
+                'role': 'ai',
+                'content': '你如何选择访谈对象？',
+                'detected_signals': ['本人职责'],
+                'suggested_replies': ['我可以补充当时选择访谈对象的依据。'],
+            },
         ],
         'evidence': '我访谈了六位同学。',
         'materials': [],
@@ -159,6 +165,9 @@ def test_conversation_snapshots_sync_and_remain_account_scoped(api):
     history = c.get('/api/v1/profile/conversation-snapshots', headers=alice).json()
     assert len(history) == 1
     assert history[0]['title'] == '更新后的标题'
+    assert history[0]['messages'][1]['suggested_replies'] == [
+        '我可以补充当时选择访谈对象的依据。'
+    ]
 
     assert c.delete(path, headers=bob).status_code == 404
     assert c.delete(path, headers=alice).json() == {'deleted': True}

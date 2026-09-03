@@ -220,7 +220,7 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
         "/api/v1/trial/workbench/sessions",
         json={"task_id": "F-01"},
     )
-    assert len(created.json()["answer"]["pending_abilities"]) == 2
+    assert len(created.json()["answer"]["pending_abilities"]) == 5
     assert "方案设计能力" not in {
         item["title"] for item in created.json()["answer"]["pending_abilities"]
     }
