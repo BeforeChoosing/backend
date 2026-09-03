@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 
 from app.agents.reflection_agent import ReflectionAgent
+from app.agents.task_coach_agent import TaskCoachAgent
 from app.agents.trial_agent import TrialAgent
 from app.config import get_settings
 from app.schemas.trial import (
@@ -64,6 +65,10 @@ def _trial_agent() -> TrialAgent:
 
 def _reflection_agent() -> ReflectionAgent:
     return ReflectionAgent(DashScopeQwenGateway(get_settings()))
+
+
+def _task_coach_agent() -> TaskCoachAgent:
+    return TaskCoachAgent(DashScopeQwenGateway(get_settings()))
 
 
 def _profile_store() -> ProfileStore:
@@ -418,17 +423,73 @@ async def _evaluate_dynamic_cached(
     "/workbench/sessions/{session_id}/coach",
     response_model=DynamicTrialCoachResponse,
 )
-def use_dynamic_trial_coach(
+async def use_dynamic_trial_coach(
     session_id: str,
     request: DynamicTrialCoachRequest,
 ) -> DynamicTrialCoachResponse:
     session = _get_dynamic_session(session_id)
     task = get_task_definition(session.task_id)
-    prompt = task.coach_prompts[request.level - 1]
+    cache_key = ModelResponseCache.fingerprint(
+        {
+            "prompt_version": TaskCoachAgent.PROMPT_VERSION,
+            "model_pool": "fast",
+            "task_id": task.id,
+            "level": request.level,
+            "answer": _dynamic_answer_cache_payload(session.answer),
+        }
+    )
+    namespace = "dynamic-trial-coach"
+    lock = _model_call_locks.setdefault((namespace, cache_key), asyncio.Lock())
+    prompt = ""
+    model: str | None = None
+    model_pool: str | None = None
+    cache_hit = False
+    generation_mode = "model"
+    async with lock:
+        cached = _model_cache().get(namespace, cache_key)
+        if cached is not None:
+            cached_prompt = cached.get("prompt") if isinstance(cached, dict) else None
+            if isinstance(cached_prompt, str) and cached_prompt.strip():
+                prompt = cached_prompt.strip()[:500]
+                model = str(cached.get("model") or "")[:120] or None
+                model_pool = str(cached.get("model_pool") or "")[:120] or None
+                cache_hit = True
+        if not prompt:
+            try:
+                raw = await _task_coach_agent().generate(
+                    task,
+                    session.answer,
+                    request.level,
+                )
+                prompt = str(raw["prompt"]).strip()[:500]
+                model = str(raw.get("_selected_model") or "")[:120] or None
+                model_pool = str(raw.get("_model_pool") or "")[:120] or None
+                _model_cache().set(
+                    namespace,
+                    cache_key,
+                    {
+                        "prompt": prompt,
+                        "model": model,
+                        "model_pool": model_pool,
+                    },
+                )
+            except (LLMGatewayError, ValueError, TypeError) as exc:
+                logger.warning(
+                    "task coach degraded task_id=%s level=%s reason=%s",
+                    task.id,
+                    request.level,
+                    exc,
+                )
+                prompt = task.coach_prompts[request.level - 1]
+                generation_mode = "preset_fallback"
     usage = DynamicTrialCoachUsage(
         level=request.level,
         prompt=prompt,
         used_at=datetime.now(timezone.utc),
+        model=model,
+        model_pool=model_pool,
+        cache_hit=cache_hit,
+        generation_mode=generation_mode,
     )
     try:
         session = _dynamic_trial_store().record_coach_usage(session_id, usage)
@@ -436,9 +497,24 @@ def use_dynamic_trial_coach(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     _record_trial_event(
         "trial.coach.use",
-        {"session_id": session_id, "task_id": task.id, "level": request.level},
+        {
+            "session_id": session_id,
+            "task_id": task.id,
+            "level": request.level,
+            "model": model,
+            "model_pool": model_pool,
+            "cache_hit": cache_hit,
+            "generation_mode": generation_mode,
+        },
     )
-    return DynamicTrialCoachResponse(prompt=prompt, usage=usage)
+    return DynamicTrialCoachResponse(
+        prompt=prompt,
+        usage=usage,
+        model=model,
+        model_pool=model_pool,
+        cache_hit=cache_hit,
+        generation_mode=generation_mode,
+    )
 
 
 def _get_session(session_id: str) -> TrialSession:

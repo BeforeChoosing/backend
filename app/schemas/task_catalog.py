@@ -129,6 +129,10 @@ class DynamicTrialCoachUsage(BaseModel):
     level: Literal[1, 2, 3]
     prompt: str = Field(max_length=500)
     used_at: datetime
+    model: str | None = Field(default=None, max_length=120)
+    model_pool: str | None = Field(default=None, max_length=120)
+    cache_hit: bool = False
+    generation_mode: Literal["model", "preset_fallback"] = "model"
 
 
 class DynamicTrialCoachRequest(BaseModel):
@@ -138,6 +142,10 @@ class DynamicTrialCoachRequest(BaseModel):
 class DynamicTrialCoachResponse(BaseModel):
     prompt: str
     usage: DynamicTrialCoachUsage
+    model: str | None = Field(default=None, max_length=120)
+    model_pool: str | None = Field(default=None, max_length=120)
+    cache_hit: bool = False
+    generation_mode: Literal["model", "preset_fallback"] = "model"
 
 
 class DynamicTrialSession(BaseModel):
