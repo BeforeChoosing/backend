@@ -408,6 +408,9 @@ class DashScopeQwenGateway:
             ],
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
+            # DashScope rejects JSON mode when thinking is enabled. All calls
+            # through this gateway require a machine-parseable JSON object.
+            "enable_thinking": False,
         }
         if stream:
             payload["stream"] = True

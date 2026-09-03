@@ -132,6 +132,9 @@ class DashScopeVisionGateway:
                         "messages": messages,
                         "temperature": 0.1,
                         "response_format": {"type": "json_object"},
+                        # Keep structured multimodal extraction compatible
+                        # with Qwen models whose thinking mode defaults on.
+                        "enable_thinking": False,
                     }
                     request = urllib.request.Request(
                         self.settings.dashscope_base_url,

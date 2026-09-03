@@ -112,6 +112,7 @@ def test_vision_gateway_sends_data_url_to_bailian(monkeypatch) -> None:
         "qwen3.5-ocr",
         "qwen-vl-ocr-2025-11-20",
     }
+    assert captured["payload"]["enable_thinking"] is False
     assert len(captured["payload"]["messages"]) == 1
     assert captured["payload"]["messages"][0]["role"] == "user"
     assert "system" in captured["payload"]["messages"][0]["content"][0]["text"]

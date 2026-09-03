@@ -120,6 +120,7 @@ def test_stream_json_forwards_deltas_and_uses_fast_model(monkeypatch, tmp_path) 
     assert deltas == ['{"reply":"你好', '学长"}']
     assert observed["payload"]["model"] == "qwen3.6-flash"
     assert observed["payload"]["stream"] is True
+    assert observed["payload"]["enable_thinking"] is False
     assert observed["timeout"] == 7
 
 
