@@ -267,11 +267,20 @@ curl -X POST http://127.0.0.1:8000/api/v1/profile/proposals \
 
 ## 上传材料提取与多模态证据
 
-`POST /api/v1/profile/materials/extract` 接收最大 20MB 的 PDF、Word (`.docx`)、Markdown 或 TXT 文档，只在内存中提取可复制文本，并把最多 12000 字返回前端供用户核对。接口不会把原文件或提取结果直接写入长期画像。
+`POST /api/v1/profile/materials/extract` 接收最大 20MB 的 PDF、Word (`.docx`)、Markdown 或 TXT 文档，提取最多 12000 字返回前端供用户核对。上传材料会按账号独立持久化，文件元数据写入该账号的 `profile_uploaded_materials` 表，原始二进制保存到服务器文件系统，供当前账号后续下载或再次引用。
 
 `POST /api/v1/profile/materials/multimodal-extract` 默认进入 `OCR_SPECIALIST_MODELS` 模型池，从当前空闲的 `qwen3.5-ocr` 与固定版本 `qwen-vl-ocr-2025-11-20` 中随机路由；快速预览、通用视觉和深度视觉分别由 `OCR_FAST_MODELS`、`VISION_GENERAL_MODELS`、`VISION_REASONING_MODELS` 配置。OCR 专用模型不发送 System Message，而是将安全约束合并到 User Message。扫描 PDF 最多渲染 `MULTIMODAL_MAX_PAGES` 页；结果统一保留 `page`、归一化 `bbox`、连续文字 `quote`、来源哈希、实际命中模型和 `source_ref`。每条结果状态固定为 `candidate`，前端核对前不会进入能力卡或职业推荐。
 
 前端上传普通文字 PDF 时只调用文字提取；检测到 PDF 没有文字层，或上传 PNG/JPG/WebP 时才调用一次 Qwen-VL。这样不会为同一份可复制文本重复支付视觉调用。旧版 `.doc` 和外部链接抓取仍不在支持范围。
+
+### 用户上传材料的存储与隔离
+
+- 文件元数据存入每个账号独立的 SQLite 数据库表 `profile_uploaded_materials`。
+- 文件原始二进制不在数据库里，而是持久化到服务器文件系统：`/var/lib/before-choosing/profile.db.users/<用户哈希>.sqlite3.files/`。
+- 上传完成后不会立即删除，可通过材料 ID 下载；仅当前账号可访问。
+- 单文件限制 20MB，每账号最多 50 个文件，总量 200MB；重复文件按 SHA-256 去重。
+
+实现见 `app/services/material_store.py`。
 
 多模态定位评测使用独立的人工标注集，金标准记录材料标识、页码、归一化区域和连续文字。离线脚本按同材料、同页、区域 IoU 与文字相似度进行一对一匹配，输出页码命中率、定位 IoU、证据精确率/召回率、材料覆盖率和页面覆盖率；样例只验证报告链路，不作为精度结论：
 
@@ -682,7 +691,7 @@ python .\scripts\run_p0_experiments.py --live-sensitivity --concurrency 3
 
 ### 正式模式审计日志
 
-前端正式模式请求携带 `X-App-Mode: use`、登录会话令牌和客户端请求标识。后端中间件按用户记录每个非健康检查请求的路径、状态、延迟和请求标识；模型网关同时记录 Qwen、Qwen-VL、Embedding、Rerank 的模型名、延迟与返回的 Token 用量。资料卡确认、修改、删除，职业推荐，任务保存、事件、Coach、提交评价以及前端点击/表单操作都会写入带用户 ID 的审计事件。正式版经历对话的完整文本和模型回复保存在本机 `profile_conversation_turns` 表，可通过 `GET /api/v1/profile/conversations` 按当前用户查看；材料只记录文件名、大小、哈希和提取结果摘要，不保存原始二进制文件。演示模式不写入正式审计记录。
+前端正式模式请求携带 `X-App-Mode: use`、登录会话令牌和客户端请求标识。后端中间件按用户记录每个非健康检查请求的路径、状态、延迟和请求标识；模型网关同时记录 Qwen、Qwen-VL、Embedding、Rerank 的模型名、延迟与返回的 Token 用量。资料卡确认、修改、删除，职业推荐，任务保存、事件、Coach、提交评价以及前端点击/表单操作都会写入带用户 ID 的审计事件。正式版经历对话的完整文本和模型回复保存在本机 `profile_conversation_turns` 表，可通过 `GET /api/v1/profile/conversations` 按当前用户查看；上传材料的元数据和哈希写入 `profile_uploaded_materials`，原始二进制按账号持久化在服务器文件系统（详见“用户上传材料的存储与隔离”）。演示模式不写入正式审计记录。
 
 查看用量摘要：
 
