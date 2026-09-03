@@ -126,6 +126,9 @@ class ReflectionAgent:
             self.gateway.generate_json,
             self.SYSTEM_PROMPT,
             json.dumps(payload, ensure_ascii=False),
+            validator=lambda response: self._normalize(
+                response, task, evaluation, reference_catalog
+            ),
         )
         return self._normalize(raw, task, evaluation, reference_catalog)
 

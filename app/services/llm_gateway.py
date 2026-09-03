@@ -207,8 +207,10 @@ class DashScopeQwenGateway:
         user_prompt: str,
         *,
         on_delta: Callable[[str], None],
+        on_reset: Callable[[], None] | None = None,
         model: str | None = None,
         tier: TextModelTier | None = None,
+        validator: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         """Stream OpenAI-compatible content deltas and return validated JSON.
 
@@ -234,13 +236,10 @@ class DashScopeQwenGateway:
                 self.settings, "llm_model_max_concurrency", 1
             ),
         )
-        started = time.perf_counter()
-        upstream_started: float | None = None
         queue_wait_ms = 0.0
-        content_parts: list[str] = []
-        usage: Any = None
         failover_count = 0
         remaining_models = list(self.model_health.available(selection.candidates))
+        last_error: LLMGatewayError | None = None
         try:
             while remaining_models:
                 with queue.admission(
@@ -261,6 +260,9 @@ class DashScopeQwenGateway:
                         user_prompt=user_prompt,
                         stream=True,
                     )
+                    content_parts: list[str] = []
+                    usage: Any = None
+                    emitted = False
                     try:
                         with urllib.request.urlopen(
                             request, timeout=self.settings.request_timeout_seconds
@@ -286,71 +288,99 @@ class DashScopeQwenGateway:
                                 if delta:
                                     content_parts.append(delta)
                                     on_delta(delta)
+                                    emitted = True
                     except urllib.error.HTTPError as exc:
                         body = exc.read().decode("utf-8", errors="replace")[:500]
-                        if exc.code in _RETRYABLE_HTTP_STATUSES:
-                            self.model_health.record_failure(selected_model)
-                        if (
-                            not content_parts
-                            and exc.code in _RETRYABLE_HTTP_STATUSES
-                            and len(remaining_models) > 1
-                        ):
-                            failover_count += 1
-                            remaining_models.remove(selected_model)
-                            self._log_failover(selection.pool, selected_model, exc.code)
-                            continue
-                        raise LLMGatewayError(
+                        last_error = LLMGatewayError(
                             f"百炼请求失败（HTTP {exc.code}）：{body}"
-                        ) from exc
+                        )
+                        retryable = exc.code in _RETRYABLE_HTTP_STATUSES
                     except TimeoutError as exc:
-                        self.model_health.record_failure(selected_model)
-                        if not content_parts and len(remaining_models) > 1:
-                            failover_count += 1
-                            remaining_models.remove(selected_model)
-                            self._log_failover(selection.pool, selected_model, "timeout")
-                            continue
-                        raise LLMGatewayTimeoutError(
+                        last_error = LLMGatewayTimeoutError(
                             "百炼响应超时，请稍后查看当前记录。"
-                        ) from exc
+                        )
+                        retryable = True
                     except urllib.error.URLError as exc:
-                        self.model_health.record_failure(selected_model)
-                        if not content_parts and len(remaining_models) > 1:
-                            failover_count += 1
-                            remaining_models.remove(selected_model)
-                            self._log_failover(selection.pool, selected_model, "connection")
-                            continue
                         if isinstance(exc.reason, TimeoutError):
-                            raise LLMGatewayTimeoutError(
+                            last_error = LLMGatewayTimeoutError(
                                 "百炼响应超时，请稍后查看当前记录。"
-                            ) from exc
-                        raise LLMGatewayError(f"百炼请求无法连接：{exc}") from exc
-                    self.model_health.record_success(selected_model)
-                    break
-                break
+                            )
+                        else:
+                            last_error = LLMGatewayError(
+                                f"百炼请求无法连接：{exc}"
+                            )
+                        retryable = True
+                    else:
+                        try:
+                            content = "".join(content_parts)
+                            if not content.strip():
+                                raise LLMGatewayError(
+                                    "百炼流式响应中没有可读取的模型文本。"
+                                )
+                            parsed = self._parse_json_content(content)
+                            if validator is not None:
+                                validator(parsed)
+                        except (LLMGatewayError, TypeError, ValueError) as exc:
+                            last_error = (
+                                exc
+                                if isinstance(exc, LLMGatewayError)
+                                else LLMGatewayError(
+                                    f"模型输出未通过结构校验：{exc}"
+                                )
+                            )
+                            retryable = True
+                        else:
+                            self.model_health.record_success(selected_model)
+                            record_model_call(
+                                getattr(
+                                    self.settings,
+                                    "profile_db_path",
+                                    "profile.db",
+                                ),
+                                service="qwen",
+                                model=selected_model,
+                                duration_ms=(
+                                    time.perf_counter() - upstream_started
+                                )
+                                * 1000,
+                                input_tokens=_usage_int(
+                                    usage, "prompt_tokens", "input_tokens"
+                                ),
+                                output_tokens=_usage_int(
+                                    usage, "completion_tokens", "output_tokens"
+                                ),
+                                metadata={
+                                    "endpoint": "chat-stream",
+                                    "pool": selection.pool,
+                                    "failover_count": failover_count,
+                                    "queue_wait_ms": round(queue_wait_ms, 3),
+                                },
+                            )
+                            parsed["_selected_model"] = selected_model
+                            parsed["_model_pool"] = selection.pool
+                            return parsed
+
+                    if retryable:
+                        self.model_health.record_failure(selected_model)
+                    if retryable and len(remaining_models) > 1:
+                        if emitted:
+                            if on_reset is None:
+                                raise last_error or LLMGatewayError(
+                                    "流式回复中断，无法安全切换模型。"
+                                )
+                            on_reset()
+                        failover_count += 1
+                        remaining_models.remove(selected_model)
+                        self._log_failover(
+                            selection.pool,
+                            selected_model,
+                            type(last_error).__name__ if last_error else "invalid",
+                        )
+                        continue
+                    raise last_error or LLMGatewayError("模型响应无效。")
         except LLMRequestCancelled as exc:
             raise LLMGatewayCancelledError(str(exc)) from exc
-
-        record_model_call(
-            getattr(self.settings, "profile_db_path", "profile.db"),
-            service="qwen",
-            model=selected_model,
-            duration_ms=(time.perf_counter() - (upstream_started or started)) * 1000,
-            input_tokens=_usage_int(usage, "prompt_tokens", "input_tokens"),
-            output_tokens=_usage_int(usage, "completion_tokens", "output_tokens"),
-            metadata={
-                "endpoint": "chat-stream",
-                "pool": selection.pool,
-                "failover_count": failover_count,
-                "queue_wait_ms": round(queue_wait_ms, 3),
-            },
-        )
-        content = "".join(content_parts)
-        if not content.strip():
-            raise LLMGatewayError("百炼流式响应中没有可读取的模型文本。")
-        parsed = self._parse_json_content(content)
-        parsed["_selected_model"] = selected_model
-        parsed["_model_pool"] = selection.pool
-        return parsed
+        raise last_error or LLMGatewayError("当前模型池没有可用模型。")
 
     def _selection(
         self,

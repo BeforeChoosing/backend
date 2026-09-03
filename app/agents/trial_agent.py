@@ -96,14 +96,25 @@ Coach提示不直接扣分；根据提示使用级别把coach_dependency标为�
             self.BASE_PROMPT_VERSION if prompt_variant == "base" else self.PROMPT_VERSION
         )
 
-    def _generate_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+    def _generate_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        validator=None,
+    ) -> dict[str, Any]:
         if self.model_override:
             return self.gateway.generate_json(
                 system_prompt,
                 user_prompt,
                 model=self.model_override,
+                validator=validator,
             )
-        return self.gateway.generate_json(system_prompt, user_prompt)
+        return self.gateway.generate_json(
+            system_prompt,
+            user_prompt,
+            validator=validator,
+        )
 
     async def evaluate(self, task: A02Task, answer: A02Answer) -> TrialEvaluation:
         user_prompt = json.dumps(
@@ -120,6 +131,7 @@ Coach提示不直接扣分；根据提示使用级别把coach_dependency标为�
             self._generate_json,
             self.SYSTEM_PROMPT if self.prompt_variant == "prompt" else self.BASE_SYSTEM_PROMPT,
             user_prompt,
+            validator=lambda payload: TrialEvaluation.model_validate(payload),
         )
         return TrialEvaluation.model_validate(raw)
 
@@ -267,5 +279,6 @@ Coach提示不直接扣分；根据提示使用级别把coach_dependency标为�
             self._generate_json,
             self.SYSTEM_PROMPT if self.prompt_variant == "prompt" else self.BASE_SYSTEM_PROMPT,
             user_prompt,
+            validator=lambda payload: self._normalize_dynamic(task, answer, payload),
         )
         return self._normalize_dynamic(task, answer, raw)

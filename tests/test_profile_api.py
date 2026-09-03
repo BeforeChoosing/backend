@@ -115,7 +115,7 @@ class _FakeProfileExplorationAgent:
             model_pool="fast",
         )
 
-    def explore_stream(self, request, trace_id, *, on_delta):
+    def explore_stream(self, request, trace_id, *, on_delta, on_reset=None):
         self.calls += 1
         on_delta('{"reply":"补充你如何')
         on_delta('根据访谈确定范围。","focus_dimension":"decision"}')

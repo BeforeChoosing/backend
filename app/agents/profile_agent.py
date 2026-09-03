@@ -120,6 +120,9 @@ class ProfileAgent:
             self.MATERIAL_UNDERSTANDING_SYSTEM_PROMPT,
             self._build_material_prompt(request),
             tier="fast",
+            validator=lambda payload: self._normalize_material(
+                payload, request, trace_id
+            ),
         )
         return self._normalize_material(raw, request, trace_id)
 
@@ -202,6 +205,9 @@ class ProfileAgent:
             self.EXPLORATION_SYSTEM_PROMPT,
             self._build_exploration_prompt(request),
             tier=request.model_tier,
+            validator=lambda payload: self._normalize_exploration(
+                payload, trace_id
+            ),
         )
         return self._normalize_exploration(raw, trace_id)
 
@@ -211,12 +217,17 @@ class ProfileAgent:
         trace_id: str,
         *,
         on_delta: Callable[[str], None],
+        on_reset: Callable[[], None] | None = None,
     ) -> ProfileExplorationResponse:
         raw = self.gateway.stream_json(
             self.EXPLORATION_SYSTEM_PROMPT,
             self._build_exploration_prompt(request),
             on_delta=on_delta,
+            on_reset=on_reset,
             tier=request.model_tier,
+            validator=lambda payload: self._normalize_exploration(
+                payload, trace_id
+            ),
         )
         return self._normalize_exploration(raw, trace_id)
 
@@ -301,7 +312,12 @@ class ProfileAgent:
     ) -> ProfileProposalResponse:
         user_prompt = self._build_prompt(request)
         raw = await asyncio.to_thread(
-            self.gateway.generate_json, self.SYSTEM_PROMPT, user_prompt
+            self.gateway.generate_json,
+            self.SYSTEM_PROMPT,
+            user_prompt,
+            validator=lambda payload: self._normalize(
+                payload, trace_id, request.experience_text
+            ),
         )
         return self._normalize(raw, trace_id, request.experience_text)
 

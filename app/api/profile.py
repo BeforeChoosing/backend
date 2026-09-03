@@ -306,6 +306,13 @@ async def stream_profile_exploration_message(
                             event_queue.put_nowait, ("delta", {"text": reply_delta})
                         )
 
+                def reset_model_delta() -> None:
+                    nonlocal reply_accumulator
+                    reply_accumulator = JsonStringFieldAccumulator("reply")
+                    loop.call_soon_threadsafe(
+                        event_queue.put_nowait, ("reset", {})
+                    )
+
                 def produce() -> None:
                     worker_token = set_request_context(context)
                     try:
@@ -314,6 +321,7 @@ async def stream_profile_exploration_message(
                                 request,
                                 trace_id,
                                 on_delta=emit_model_delta,
+                                on_reset=reset_model_delta,
                             ),
                             request,
                         )

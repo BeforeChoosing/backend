@@ -123,6 +123,78 @@ def test_stream_json_forwards_deltas_and_uses_fast_model(monkeypatch, tmp_path) 
     assert observed["timeout"] == 7
 
 
+def test_stream_json_resets_partial_output_before_model_failover(
+    monkeypatch, tmp_path
+) -> None:
+    attempted: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, content: str):
+            self.content = content
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            yield (
+                "data: "
+                + json.dumps({"choices": [{"delta": {"content": self.content}}]})
+                + "\n"
+            ).encode()
+            yield b"data: [DONE]\n"
+
+    @contextmanager
+    def admission(**kwargs):
+        yield QueueTicket(
+            request_id=kwargs["request_id"],
+            user_id=kwargs["user_id"],
+            state="running",
+            enqueued_at=100.0,
+            started_at=100.0,
+        )
+
+    class FakeQueue:
+        def admission(self, **kwargs):
+            return admission(**kwargs)
+
+    def fake_urlopen(request, timeout):
+        model = json.loads(request.data.decode())["model"]
+        attempted.append(model)
+        return FakeResponse(
+            '[{"reply":"错误"}]'
+            if model == "bad-stream"
+            else '{"reply":"有效"}'
+        )
+
+    monkeypatch.setattr(llm_gateway, "get_llm_request_queue", lambda **kwargs: FakeQueue())
+    monkeypatch.setattr(llm_gateway.urllib.request, "urlopen", fake_urlopen)
+    settings = Settings(
+        dashscope_api_key="test-key",
+        qwen_fast_models=("bad-stream", "good-stream"),
+        llm_model_failure_threshold=99,
+        profile_db_path=str(tmp_path / "profile.db"),
+    )
+    deltas: list[str] = []
+    resets: list[bool] = []
+
+    result = llm_gateway.DashScopeQwenGateway(settings).stream_json(
+        "system",
+        "user",
+        tier="fast",
+        on_delta=deltas.append,
+        on_reset=lambda: resets.append(True),
+    )
+
+    assert result["reply"] == "有效"
+    assert result["_selected_model"] == "good-stream"
+    assert attempted == ["bad-stream", "good-stream"]
+    assert deltas == ['[{"reply":"错误"}]', '{"reply":"有效"}']
+    assert resets == [True]
+
+
 def test_generate_json_fails_over_to_another_model_before_returning_error(
     monkeypatch, tmp_path
 ) -> None:
