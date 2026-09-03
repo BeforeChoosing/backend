@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 3,
   "corpus": "public-career-demo",
   "documents": [
     {
@@ -7,42 +7,224 @@
       "document_id": "method-capability-v1",
       "corpus": "capability_method",
       "trust_level": "secondary_summary",
-      "source_note": "公共 RAG 知识库整理稿，进入 Demo 前需人工复核。"
+      "source_note": "公共 RAG 知识库整理稿，进入 Demo 前需人工复核。",
+      "version": "legacy-v1",
+      "retrieved_at": "2026-08-29",
+      "source_type": "local_curated_markdown"
     },
     {
       "path": "job_search_workflow.md",
       "document_id": "method-job-search-v1",
       "corpus": "capability_method",
       "trust_level": "secondary_summary",
-      "source_note": "公共 RAG 知识库整理稿，进入 Demo 前需人工复核。"
+      "source_note": "公共 RAG 知识库整理稿，进入 Demo 前需人工复核。",
+      "version": "legacy-v1",
+      "retrieved_at": "2026-08-29",
+      "source_type": "local_curated_markdown"
     },
     {
       "path": "tools_reference.md",
       "document_id": "method-tools-v1",
       "corpus": "capability_method",
       "trust_level": "secondary_summary",
-      "source_note": "公共 RAG 知识库整理稿，进入 Demo 前需人工复核。"
+      "source_note": "公共 RAG 知识库整理稿，进入 Demo 前需人工复核。",
+      "version": "legacy-v1",
+      "retrieved_at": "2026-08-29",
+      "source_type": "local_curated_markdown"
     },
     {
       "path": "职业价值观.md",
       "document_id": "values-v1",
       "corpus": "career",
       "trust_level": "secondary_summary",
-      "source_note": "公共 RAG 知识库整理稿，进入 Demo 前需人工复核。"
+      "source_note": "公共 RAG 知识库整理稿，进入 Demo 前需人工复核。",
+      "version": "legacy-v1",
+      "retrieved_at": "2026-08-29",
+      "source_type": "local_curated_markdown"
     },
     {
       "path": "jobs/ai_product_manager.md",
       "document_id": "job-ai-product-manager-v1",
       "corpus": "career",
       "trust_level": "secondary_summary",
-      "source_note": "基于公开 JD 的交叉归纳稿；原始 JD URL 尚待补齐。"
+      "source_note": "基于公开 JD 的交叉归纳稿；原始 JD URL 尚待补齐。",
+      "version": "legacy-v1",
+      "retrieved_at": "2026-08-29",
+      "source_type": "local_curated_markdown"
     },
     {
       "path": "jobs/user_experience_designer.md",
       "document_id": "job-user-experience-designer-v1",
       "corpus": "career",
       "trust_level": "secondary_summary",
-      "source_note": "基于公开资料的交叉归纳稿；原始 URL 尚待补齐。"
+      "source_note": "基于公开资料的交叉归纳稿；原始 URL 尚待补齐。",
+      "version": "legacy-v1",
+      "retrieved_at": "2026-08-29",
+      "source_type": "local_curated_markdown"
+    },
+    {
+      "path": "tasks/task_catalog.md",
+      "document_id": "task-library-code-v2",
+      "corpus": "task_library",
+      "trust_level": "primary_code_snapshot",
+      "source_note": "由 app/tasks/catalog.py、evaluation_rules.py 和 source_content.py 导出；模拟材料已显式标注。",
+      "version": "task-library-v2.0",
+      "retrieved_at": "2026-08-29",
+      "source_type": "local_runtime_snapshot",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "项目内部任务定义；仅用于本地知识库"
+    },
+    {
+      "path": "tasks/evaluation_rules.md",
+      "document_id": "evaluation-rules-code-v2",
+      "corpus": "evaluation_rules",
+      "trust_level": "primary_code_snapshot",
+      "source_note": "由 app/tasks/evaluation_rules.py 导出；评价规则与等级锚点以代码版本为准。",
+      "version": "evaluation-rules-v2.0",
+      "retrieved_at": "2026-08-29",
+      "source_type": "local_runtime_snapshot",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "项目内部评价规则；仅用于本地知识库"
+    },
+    {
+      "path": "workbench/workbench_evidence_rules.md",
+      "document_id": "workbench-evidence-rules-v1",
+      "corpus": "workbench",
+      "trust_level": "primary_local_spec",
+      "source_note": "来自本地产品说明书、用户画像 PRD、技术报告和产品技术交接文档的去敏整理。",
+      "version": "workbench-rules-v1.0",
+      "retrieved_at": "2026-08-29",
+      "source_type": "local_specification",
+      "authority_score": 0.95,
+      "relevance_score": 1.0,
+      "license": "项目内部规格；不含用户个人资料"
+    },
+    {
+      "path": "cases/apple_ai_product_cases.md",
+      "document_id": "case-apple-ai-product-v1",
+      "corpus": "case_study",
+      "trust_level": "primary_official_summary",
+      "source_note": "Apple Newsroom、Apple Developer/WWDC、Apple Machine Learning Research 与 Apple Security Research 的结构化短摘要；不复制受限原文，功能状态按页面版本标注。",
+      "source_url": "https://developer.apple.com/videos/play/wwdc2026/112/",
+      "version": "apple-ai-cases-v1.0",
+      "retrieved_at": "2026-08-30",
+      "source_type": "official_product_research_security_pages",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "官方公开资料；仅作短摘要与链接引用"
+    },
+    {
+      "path": "cases/apple_ai_evaluation_delivery.md",
+      "document_id": "case-apple-ai-eval-v1",
+      "corpus": "evaluation_safety",
+      "trust_level": "primary_official_summary",
+      "source_note": "Apple Developer/WWDC、Apple Machine Learning Research、Apple Security Research 与 Apple Newsroom 的评测和交付证据摘要。",
+      "source_url": "https://security.apple.com/documentation/private-cloud-compute/",
+      "version": "apple-ai-evaluation-v1.0",
+      "retrieved_at": "2026-08-30",
+      "source_type": "official_evaluation_security_pages",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "官方公开资料；仅作短摘要与链接引用"
+    },
+    {
+      "path": "cases/official_genai_product_workflows.md",
+      "document_id": "case-official-genai-workflows-v1",
+      "corpus": "case_study",
+      "trust_level": "primary_official_summary",
+      "source_note": "OpenAI、Google Cloud、Databricks、Anthropic、Meta、Adobe、Apple、阿里云、百度、火山引擎和华为云官方产品/工程/安全资料的结构化摘要。",
+      "source_url": "https://docs.databricks.com/aws/en/mlflow3/genai/eval-monitor/",
+      "version": "official-genai-workflows-v1.0",
+      "retrieved_at": "2026-08-30",
+      "source_type": "official_product_engineering_security_pages",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "官方公开资料；仅作短摘要与链接引用"
+    },
+    {
+      "path": "methods/official_genai_evaluation_and_governance.md",
+      "document_id": "method-genai-evaluation-governance-v1",
+      "corpus": "evaluation_safety",
+      "trust_level": "primary_official_summary",
+      "source_note": "OpenAI、Google Cloud、Databricks、Apple、Meta、阿里云和百度官方评测、治理与知识库文档的结构化摘要。",
+      "source_url": "https://openai.com/index/trustworthy-third-party-evaluations-foundations/",
+      "version": "official-genai-evaluation-v1.0",
+      "retrieved_at": "2026-08-30",
+      "source_type": "official_evaluation_governance_pages",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "官方公开资料；仅作短摘要与链接引用"
+    },
+    {
+      "path": "jobs/international_ai_product_roles_v2.md",
+      "document_id": "international-ai-product-roles-v2",
+      "corpus": "career_international",
+      "trust_level": "primary_official_summary",
+      "source_note": "Google、OpenAI、Anthropic、Databricks、Meta、Adobe 官方招聘/职业/团队资料的结构化摘要；可访问正文与聚合页、历史页分别标注使用边界。",
+      "source_url": "https://www.google.com/about/careers/applications/jobs/results/74642828323365574-product-manager/",
+      "version": "international-jd-v2.0",
+      "retrieved_at": "2026-08-30",
+      "source_type": "official_career_and_team_pages",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "公开招聘/职业页；保留链接并仅作事实摘要"
+    },
+    {
+      "path": "jobs/china_ai_product_roles.md",
+      "document_id": "china-ai-product-roles-v1",
+      "corpus": "career_china",
+      "trust_level": "primary_official_summary",
+      "source_note": "阿里、字节、华为、京东、快手、智谱、MiniMax、DeepSeek 官方招聘入口和岗位详情的结构化摘要；岗位状态和正文可见性按页面记录。",
+      "source_url": "https://campus-talent.alibaba.com/campus/gov",
+      "version": "china-jd-v1.0",
+      "retrieved_at": "2026-08-30",
+      "source_type": "official_career_pages",
+      "authority_score": 1.0,
+      "relevance_score": 1.0,
+      "license": "公开招聘页；保留链接并仅作事实摘要"
+    },
+    {
+      "path": "jobs/jd_evidence_matrix.md",
+      "document_id": "jd-evidence-matrix-v2",
+      "corpus": "career",
+      "trust_level": "secondary_source_registry",
+      "source_note": "从 CoachAgent 产品经理资料库 Excel 的 JD 样本与来源台账去重整理；岗位正文仍以链接页面为准。",
+      "version": "jd-matrix-v2.0",
+      "retrieved_at": "2026-08-29",
+      "source_type": "local_source_registry",
+      "authority_score": 0.9,
+      "relevance_score": 0.95,
+      "license": "来源 URL 仅作引用入口；不复制受限原文"
+    },
+    {
+      "path": "jobs/international_ai_product_roles.md",
+      "document_id": "international-ai-product-roles-v1",
+      "corpus": "career_international",
+      "trust_level": "primary_official_summary",
+      "source_note": "Apple、Microsoft、Amazon、NVIDIA、Salesforce、ServiceNow 官方招聘／职业页的可核验摘要；聚合页和待核验入口不作为岗位事实。",
+      "source_url": "https://jobs.apple.com/",
+      "version": "international-jd-v1.0",
+      "retrieved_at": "2026-08-29",
+      "source_type": "official_career_pages",
+      "authority_score": 1.0,
+      "relevance_score": 0.95,
+      "license": "公开招聘页；保留链接并仅作事实摘要"
+    },
+    {
+      "path": "methods/official_ai_product_practice.md",
+      "document_id": "official-ai-product-practice-v1",
+      "corpus": "capability_method",
+      "trust_level": "primary_official_summary",
+      "source_note": "NIST AI RMF/GAI Profile、Google PAIR、阿里云百炼 Embedding/Rerank 官方文档的短摘要；需以链接页面核验最新版本。",
+      "source_url": "https://www.nist.gov/itl/ai-risk-management-framework",
+      "version": "official-methods-v1.0",
+      "retrieved_at": "2026-08-29",
+      "source_type": "official_documentation",
+      "authority_score": 1.0,
+      "relevance_score": 0.9,
+      "license": "官方公开文档；仅作短摘要与链接引用"
     }
   ]
 }

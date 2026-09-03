@@ -1,14 +1,121 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import re
+import time
+from uuid import uuid4
 
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from app.api.audit import router as audit_router
+from app.api.auth import router as auth_router
 from app.api.health import router as health_router
 from app.api.career import router as career_router
 from app.api.profile import router as profile_router
 from app.api.trial import router as trial_router
 from app.config import get_settings
+from app.services.audit_log import AuditLogStore
+from app.services.auth_store import AuthStore
+from app.services.request_context import (
+    RequestContext,
+    reset_request_context,
+    set_request_context,
+)
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.1.0")
+
+
+@app.middleware("http")
+async def audit_formal_mode_requests(request: Request, call_next):
+    """Authenticate private APIs independently of client-selected UI mode."""
+
+    app_mode = request.headers.get("X-App-Mode", "unknown").strip().lower()
+    path = request.url.path.rstrip("/") or "/"
+    is_api = path == settings.api_prefix or path.startswith(settings.api_prefix + "/")
+    public_auth = request.method == "POST" and path in {
+        f"{settings.api_prefix}/auth/login", f"{settings.api_prefix}/auth/register",
+    }
+    public_read = request.method in {"GET", "HEAD"} and (
+        path == f"{settings.api_prefix}/health"
+        or re.fullmatch(
+            re.escape(settings.api_prefix) + r"/trial/(?:catalog(?:/[^/]+)?|tasks/[^/]+)",
+            path,
+        ) is not None
+    )
+    requires_auth = is_api and not public_auth and not public_read
+    # Any private API access is a real-mode operation. A forged/missing mode
+    # cannot disable either authentication or audit logging.
+    if requires_auth or public_auth:
+        app_mode = "use"
+    request_id = request.headers.get("X-Client-Request-Id", "").strip() or uuid4().hex
+    response = None
+    status_code = 500
+    authenticated_user = None
+    if request.method != "OPTIONS":
+        if requires_auth:
+            authorization = request.headers.get("Authorization", "")
+            scheme, _, raw_token = authorization.partition(" ")
+            if scheme.lower() != "bearer" or not raw_token.strip():
+                status_code = 401
+                response = JSONResponse(
+                    status_code=401,
+                    content={"detail": "正式模式需要先登录。"},
+                )
+            else:
+                authenticated_user = AuthStore(
+                    settings.profile_db_path,
+                    session_ttl_hours=settings.auth_session_ttl_hours,
+                ).resolve_token(raw_token)
+                if authenticated_user is None:
+                    status_code = 401
+                    response = JSONResponse(
+                        status_code=401,
+                        content={"detail": "登录已失效，请重新登录。"},
+                    )
+    context = RequestContext(
+        app_mode=app_mode,
+        request_id=request_id,
+        user_id=str(authenticated_user["id"]) if authenticated_user else "",
+        user_email=str(authenticated_user["email"]) if authenticated_user else "",
+        user_name=str(authenticated_user["display_name"]) if authenticated_user else "",
+    )
+    token = set_request_context(context)
+    started = time.perf_counter()
+    try:
+        if response is None:
+            response = await call_next(request)
+            status_code = response.status_code
+        return response
+    finally:
+        duration_ms = (time.perf_counter() - started) * 1000
+        if (
+            app_mode == "use"
+            and request.method != "OPTIONS"
+            and not request.url.path.endswith("/health")
+        ):
+            try:
+                AuditLogStore(settings.profile_db_path).record(
+                    event_type="http_request",
+                    app_mode="use",
+                    user_id=context.user_id,
+                    request_id=request_id,
+                    action=f"{request.method} {request.url.path}",
+                    method=request.method,
+                    path=request.url.path,
+                    status_code=status_code,
+                    duration_ms=duration_ms,
+                    metadata={"query": request.url.query[:400]},
+                )
+            except Exception:  # noqa: BLE001 - audit must never break the product
+                pass
+        reset_request_context(token)
+        if response is not None:
+            response.headers["X-Request-Id"] = request_id
+            if requires_auth or public_auth:
+                response.headers["Cache-Control"] = "no-store"
+
+
+# CORS wraps the auth middleware so browsers can receive its 401 responses.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(settings.cors_origins),
@@ -16,10 +123,14 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
 app.include_router(health_router, prefix=settings.api_prefix)
+app.include_router(auth_router, prefix=settings.api_prefix)
 app.include_router(profile_router, prefix=settings.api_prefix)
 app.include_router(career_router, prefix=settings.api_prefix)
 app.include_router(trial_router, prefix=settings.api_prefix)
+app.include_router(audit_router, prefix=settings.api_prefix)
 
 
 @app.get("/")

@@ -1,0 +1,1 @@
+{"case_id":"mm-example-001","materials":["resume","portfolio"],"gold":[{"evidence_id":"resume-result","material_id":"resume","page":1,"bbox":[100,100,500,500],"quote":"负责用户访谈并完成方案迭代"},{"evidence_id":"portfolio-impact","material_id":"portfolio","page":2,"bbox":[200,200,700,700],"quote":"上线后留存率提升 18%"}],"metadata":{"label_status":"human_review_required","fixture_type":"example"}}

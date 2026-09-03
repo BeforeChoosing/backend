@@ -25,6 +25,7 @@ ExplorationFocus = Literal[
     "transfer",
     "evidence",
 ]
+ExplorationCoverageStatus = Literal["missing", "weak", "sufficient", "confirmed"]
 
 
 class ProfileConversationMessage(BaseModel):
@@ -35,6 +36,10 @@ class ProfileConversationMessage(BaseModel):
 class ProfileExplorationRequest(BaseModel):
     experience_text: str = Field(min_length=20, max_length=12000)
     messages: list[ProfileConversationMessage] = Field(default_factory=list, max_length=12)
+    # The client may echo the dimensions already prompted by the server.  This
+    # is optional so older clients remain compatible; coverage is still
+    # recomputed from the full user transcript on every request.
+    focus_history: list[ExplorationFocus] = Field(default_factory=list, max_length=12)
     target_role: str | None = Field(default=None, max_length=120)
     existing_card_titles: list[str] = Field(default_factory=list, max_length=20)
     request_id: str | None = Field(default=None, min_length=8, max_length=100)
@@ -48,6 +53,7 @@ class ProfileExplorationResponse(BaseModel):
     evidence_gap: str = Field(min_length=1, max_length=300)
     potential_hypotheses: list[str] = Field(default_factory=list, max_length=3)
     ready_for_proposal: bool = False
+    coverage: dict[ExplorationFocus, ExplorationCoverageStatus] = Field(default_factory=dict)
     notice: str = "潜能线索仅用于继续补充经历，确认前不会写入个人画像。"
 
 

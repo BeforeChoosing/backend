@@ -1,7 +1,5 @@
-from fastapi.testclient import TestClient
 
 from app.api import trial as trial_api
-from app.main import app
 from app.schemas.profile import CardProposal
 from app.schemas.trial import (
     ReflectionChange,
@@ -143,14 +141,14 @@ def _complete_dynamic_answer() -> dict:
     }
 
 
-def test_trial_api_requires_event_and_returns_observed_evidence(tmp_path, monkeypatch):
+def test_trial_api_requires_event_and_returns_observed_evidence(tmp_path, monkeypatch, authenticated_client):
     trial_store = TrialStore(tmp_path / "trial.db")
     profile_store = ProfileStore(tmp_path / "profile.db")
     monkeypatch.setattr(trial_api, "_trial_store", lambda: trial_store)
     monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
     monkeypatch.setattr(trial_api, "_trial_agent", lambda: FakeTrialAgent())
     monkeypatch.setattr(trial_api, "_reflection_agent", lambda: FakeReflectionAgent())
-    client = TestClient(app)
+    client = authenticated_client
 
     preflight = client.options(
         "/api/v1/trial/sessions/test/answer",
@@ -190,7 +188,7 @@ def test_trial_api_requires_event_and_returns_observed_evidence(tmp_path, monkey
     assert profile_store.get_profile().version == 1
 
 
-def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch):
+def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch, authenticated_client):
     dynamic_store = DynamicTrialStore(tmp_path / "dynamic.db")
     profile_store = ProfileStore(tmp_path / "profile.db")
     _confirm_trial_card(profile_store)
@@ -198,7 +196,7 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
     monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
     monkeypatch.setattr(trial_api, "_trial_agent", lambda: FakeTrialAgent())
     monkeypatch.setattr(trial_api, "_reflection_agent", lambda: FailingReflectionAgent())
-    client = TestClient(app)
+    client = authenticated_client
 
     task = client.get("/api/v1/trial/catalog/F-01")
     assert task.status_code == 200
@@ -250,17 +248,28 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
     assert evidence["observed_level"] == "L3"
     assert evidence["primary_ability"] == "用户洞察"
     assert evidence["coach_dependency"] == "方向性提示"
+    assert evidence["selected_card_ids"] == ["trial-card-1"]
+    assert {item["id"] for item in evidence["evidence_items"]} >= {
+        "card:trial-card-1",
+        "answer:problem",
+        "event:decision",
+    }
+    evaluation = submitted.json()["evaluation"]
+    assert evaluation["evaluation_protocol"] == "trial-evidence-v1"
+    assert evaluation["ability_applications"][0]["card_id"] == "trial-card-1"
+    assert evaluation["ability_applications"][0]["status"] == "未形成证据"
+    assert evaluation["dimensions"][0]["evidence_refs"]
     assert evidence["reflection"]["generation_mode"] == "deterministic_fallback"
     assert evidence["reflection"]["changes"][0]["change_type"] == "仍待验证"
     assert profile_store.get_completed_task_ids() == ["F-01"]
 
 
-def test_dynamic_workbench_rejects_unconfirmed_card_play(tmp_path, monkeypatch):
+def test_dynamic_workbench_rejects_unconfirmed_card_play(tmp_path, monkeypatch, authenticated_client):
     dynamic_store = DynamicTrialStore(tmp_path / "dynamic.db")
     profile_store = ProfileStore(tmp_path / "profile.db")
     monkeypatch.setattr(trial_api, "_dynamic_trial_store", lambda: dynamic_store)
     monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
-    client = TestClient(app)
+    client = authenticated_client
 
     created = client.post(
         "/api/v1/trial/workbench/sessions",
@@ -284,15 +293,14 @@ def test_dynamic_workbench_rejects_unconfirmed_card_play(tmp_path, monkeypatch):
 
 
 def test_dynamic_workbench_persists_three_card_play_challenges_without_model_call(
-    tmp_path,
-    monkeypatch,
+    tmp_path, monkeypatch, authenticated_client,
 ):
     dynamic_store = DynamicTrialStore(tmp_path / "dynamic.db")
     profile_store = ProfileStore(tmp_path / "profile.db")
     _confirm_trial_card(profile_store)
     monkeypatch.setattr(trial_api, "_dynamic_trial_store", lambda: dynamic_store)
     monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
-    client = TestClient(app)
+    client = authenticated_client
 
     task = get_task_definition("F-01")
     created = client.post(
@@ -326,7 +334,7 @@ def test_dynamic_workbench_persists_three_card_play_challenges_without_model_cal
     assert all(item["feedback"] for item in answer["card_play_rounds"])
 
 
-def test_identical_dynamic_answer_reuses_trial_evaluation(tmp_path, monkeypatch):
+def test_identical_dynamic_answer_reuses_trial_evaluation(tmp_path, monkeypatch, authenticated_client):
     dynamic_store = DynamicTrialStore(tmp_path / "dynamic.db")
     profile_store = ProfileStore(tmp_path / "profile.db")
     _confirm_trial_card(profile_store)
@@ -335,7 +343,7 @@ def test_identical_dynamic_answer_reuses_trial_evaluation(tmp_path, monkeypatch)
     monkeypatch.setattr(trial_api, "_profile_store", lambda: profile_store)
     monkeypatch.setattr(trial_api, "_trial_agent", lambda: agent)
     monkeypatch.setattr(trial_api, "_reflection_agent", lambda: FailingReflectionAgent())
-    client = TestClient(app)
+    client = authenticated_client
 
     for _ in range(2):
         created = client.post(

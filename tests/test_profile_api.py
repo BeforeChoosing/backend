@@ -1,7 +1,5 @@
-from fastapi.testclient import TestClient
 
 from app.api import profile as profile_api
-from app.main import app
 from app.schemas.profile import CardProposal
 from app.schemas.profile import ProfileExplorationResponse
 from app.services.profile_store import ProfileStore
@@ -28,10 +26,10 @@ def _card_payload() -> dict:
     ).model_dump(mode="json")
 
 
-def test_profile_card_api_lifecycle(tmp_path, monkeypatch):
+def test_profile_card_api_lifecycle(tmp_path, monkeypatch, authenticated_client):
     store = ProfileStore(tmp_path / "profile.db")
     monkeypatch.setattr(profile_api, "_profile_store", lambda: store)
-    client = TestClient(app)
+    client = authenticated_client
 
     confirmed = client.post(
         "/api/v1/profile/cards/confirm",
@@ -55,7 +53,7 @@ def test_profile_card_api_lifecycle(tmp_path, monkeypatch):
     assert missing.status_code == 404
 
 
-def test_profile_overview_returns_submitted_task_evidence(tmp_path, monkeypatch):
+def test_profile_overview_returns_submitted_task_evidence(tmp_path, monkeypatch, authenticated_client):
     store = ProfileStore(tmp_path / "profile.db")
     store.record_observed_evidence(
         "dynamic-trial-test",
@@ -84,7 +82,7 @@ def test_profile_overview_returns_submitted_task_evidence(tmp_path, monkeypatch)
         ),
     )
     monkeypatch.setattr(profile_api, "_profile_store", lambda: store)
-    client = TestClient(app)
+    client = authenticated_client
 
     overview = client.get("/api/v1/profile/overview")
 
@@ -110,12 +108,12 @@ class _FakeProfileExplorationAgent:
         )
 
 
-def test_profile_exploration_reuses_identical_model_result(tmp_path, monkeypatch):
+def test_profile_exploration_reuses_identical_model_result(tmp_path, monkeypatch, authenticated_client):
     store = ProfileStore(tmp_path / "profile.db")
     agent = _FakeProfileExplorationAgent()
     monkeypatch.setattr(profile_api, "_profile_store", lambda: store)
     monkeypatch.setattr(profile_api, "_profile_agent", lambda: agent)
-    client = TestClient(app)
+    client = authenticated_client
     request = {
         "experience_text": "我在校园项目中负责访谈用户并整理需求，随后和团队完成了产品原型。",
         "messages": [{"role": "user", "content": "我负责访谈并整理了十五条反馈。"}],
@@ -129,3 +127,25 @@ def test_profile_exploration_reuses_identical_model_result(tmp_path, monkeypatch
     assert second.status_code == 200
     assert first.json() == second.json()
     assert agent.calls == 1
+
+
+def test_profile_exploration_server_owns_focus_and_readiness(tmp_path, monkeypatch, authenticated_client):
+    store = ProfileStore(tmp_path / "profile.db")
+    agent = _FakeProfileExplorationAgent()
+    monkeypatch.setattr(profile_api, "_profile_store", lambda: store)
+    monkeypatch.setattr(profile_api, "_profile_agent", lambda: agent)
+    client = authenticated_client
+
+    response = client.post(
+        "/api/v1/profile/exploration/messages",
+        json={
+            "experience_text": "我在校园项目中负责整理需求并完成一版可用原型。",
+            "request_id": "request-explore-controller",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["focus_dimension"] == "decision"
+    assert payload["ready_for_proposal"] is False
+    assert payload["coverage"]["decision"] == "missing"

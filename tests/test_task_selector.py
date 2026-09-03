@@ -1,9 +1,7 @@
 from datetime import datetime, timezone
 
-from fastapi.testclient import TestClient
 
 from app.api import trial as trial_api
-from app.main import app
 from app.schemas.profile import ProfileCard
 from app.schemas.profile import ProfileEvidenceRecord
 from app.schemas.trial import ObservedEvidence, TrialEvaluation
@@ -128,7 +126,7 @@ def test_selector_considers_latest_evaluation_gap() -> None:
     assert "洞察" in recommendation.reason or "创作" in recommendation.reason
 
 
-def test_catalog_and_recommendation_api_use_confirmed_cards(tmp_path, monkeypatch) -> None:
+def test_catalog_and_recommendation_api_use_confirmed_cards(tmp_path, monkeypatch, authenticated_client) -> None:
     store = ProfileStore(tmp_path / "profile.db")
     card = _card(
         "platform",
@@ -139,7 +137,7 @@ def test_catalog_and_recommendation_api_use_confirmed_cards(tmp_path, monkeypatc
     )
     store.confirm_cards([card], trace_id="trace-selector")
     monkeypatch.setattr(trial_api, "_profile_store", lambda: store)
-    client = TestClient(app)
+    client = authenticated_client
 
     catalog = client.get("/api/v1/trial/catalog")
     recommendation = client.post(

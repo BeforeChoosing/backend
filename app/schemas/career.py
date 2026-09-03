@@ -17,6 +17,13 @@ class CareerCitation(BaseModel):
     content: str = Field(max_length=1200)
     trust_level: str
     source_note: str
+    source_url: str = ""
+    published_at: str = ""
+    version: str = ""
+    license: str = ""
+    source_type: str = ""
+    authority_score: float = 0.0
+    relevance_score: float = 0.0
 
 
 class CareerSupport(BaseModel):

@@ -27,6 +27,7 @@ def test_dynamic_evaluation_is_bound_to_source_rubric_and_coach_confidence() -> 
                 "weight": 1,
                 "score": 80,
                 "evidence": "回答与该维度有关。",
+                "evidence_refs": ["answer:validation", "invented:ref"],
             }
             for criterion in task.rubric
         ]
@@ -58,3 +59,44 @@ def test_dynamic_evaluation_is_bound_to_source_rubric_and_coach_confidence() -> 
     assert evaluation.coach_dependency == "强提示"
     assert evaluation.confidence == "中"
     assert len(evaluation.supporting_evidence) == 1
+    assert evaluation.dimensions[0].evidence_refs == ["answer:validation", "invented:ref"]
+
+
+def test_dynamic_evaluation_truncates_model_lists_to_schema_limits() -> None:
+    task = get_task_definition("M-02")
+    answer = DynamicTrialAnswer(
+        step_answers={step.id: "已完成" for step in task.steps},
+        event_decision="调整",
+        event_response="提高高风险样本权重。",
+    )
+    raw = {
+        "summary": "形成最小评测方案。",
+        "dimensions": [
+            {
+                "dimension": criterion.dimension,
+                "weight": criterion.weight,
+                "score": 80,
+                "evidence": "回答与该维度有关。",
+                "evidence_refs": ["answer:validation"],
+            }
+            for criterion in task.rubric
+        ],
+        "primary_ability": task.primary_skill,
+        "observed_level": "L3",
+        "level_reason": "覆盖正常、边界与高风险。",
+        "supporting_evidence": [],
+        "process_evidence": [f"过程 {index}" for index in range(7)],
+        "coach_dependency": "独立完成",
+        "strengths": [f"优势 {index}" for index in range(6)],
+        "gaps": [f"缺口 {index}" for index in range(6)],
+        "next_step": "补充一致性规则。",
+        "confidence": "中",
+        "evidence_refs": ["answer:validation"],
+        "ability_applications": [],
+    }
+
+    evaluation = TrialAgent._normalize_dynamic(task, answer, raw)
+
+    assert len(evaluation.process_evidence) == 6
+    assert len(evaluation.strengths) == 5
+    assert len(evaluation.gaps) == 5

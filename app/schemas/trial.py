@@ -18,6 +18,17 @@ AttributionLayer = Literal[
 Confidence = Literal["低", "中", "高"]
 EventDecision = Literal["维持", "调整"]
 ReflectionChangeType = Literal["新增证据", "加强证据", "冲突证据", "仍待验证"]
+TrialEvidenceSource = Literal[
+    "ability_card",
+    "card_play",
+    "answer",
+    "material",
+    "event",
+    "coach",
+]
+TrialEvidenceKind = Literal["planned", "observed", "deliverable", "reference", "interaction"]
+TrialAbilityApplicationStatus = Literal["已应用", "部分应用", "未形成证据"]
+TrialVerificationStatus = Literal["accepted", "needs_review", "repaired"]
 
 
 class A02Metric(BaseModel):
@@ -102,17 +113,68 @@ class A02Answer(BaseModel):
     event_reason: str = Field(default="", max_length=500)
 
 
+class TrialEvidenceItem(BaseModel):
+    """A bounded, user-visible evidence item assembled from persisted task data."""
+
+    id: str = Field(min_length=1, max_length=120)
+    source: TrialEvidenceSource
+    source_id: str = Field(min_length=1, max_length=120)
+    kind: TrialEvidenceKind
+    label: str = Field(min_length=1, max_length=160)
+    content: str = Field(min_length=1, max_length=600)
+
+
+class TrialAbilityApplication(BaseModel):
+    """How one confirmed ability card was used, with references to observed work."""
+
+    card_id: str = Field(min_length=1, max_length=120)
+    card_title: str = Field(min_length=1, max_length=120)
+    challenge_ids: list[str] = Field(default_factory=list, max_length=3)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=8)
+    status: TrialAbilityApplicationStatus = "未形成证据"
+    basis: str = Field(default="", max_length=500)
+    next_step: str = Field(default="", max_length=300)
+
+
+class TrialEvidenceBundle(BaseModel):
+    """Evidence assembled by the server before a model evaluation is persisted."""
+
+    items: list[TrialEvidenceItem] = Field(default_factory=list, max_length=40)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=12)
+    selected_card_ids: list[str] = Field(default_factory=list, max_length=12)
+    ability_applications: list[TrialAbilityApplication] = Field(
+        default_factory=list,
+        max_length=12,
+    )
+
+
 class TrialDimensionEvaluation(BaseModel):
     dimension: str
     weight: int = Field(default=0, ge=0, le=100)
     score: int = Field(ge=0, le=100)
     evidence: str = Field(max_length=500)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=8)
 
 
 class TrialAbilityEvidence(BaseModel):
     ability: str
     observed_level: Literal["L1", "L2", "L3", "L4", "L5", "证据不足"]
     evidence: str = Field(max_length=600)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=8)
+
+
+class TrialVerification(BaseModel):
+    """Deterministic gate applied after a TrialAgent response."""
+
+    status: TrialVerificationStatus = "accepted"
+    triggered: bool = False
+    reason_codes: list[str] = Field(default_factory=list, max_length=12)
+    evidence_coverage: float = Field(default=0.0, ge=0, le=1)
+    invalid_evidence_ref_count: int = Field(default=0, ge=0)
+    missing_dimension_count: int = Field(default=0, ge=0)
+    score_without_evidence_count: int = Field(default=0, ge=0)
+    model_reviewed: bool = False
+    review_summary: str = Field(default="", max_length=600)
 
 
 class TrialEvaluation(BaseModel):
@@ -128,6 +190,10 @@ class TrialEvaluation(BaseModel):
     gaps: list[str] = Field(max_length=5)
     next_step: str = Field(max_length=300)
     confidence: Literal["低", "中", "高"]
+    evidence_refs: list[str] = Field(default_factory=list, max_length=12)
+    ability_applications: list[TrialAbilityApplication] = Field(default_factory=list, max_length=12)
+    verification: TrialVerification | None = None
+    evaluation_protocol: str = "trial-evidence-v1"
 
 
 class ReflectionChange(BaseModel):
@@ -157,6 +223,8 @@ class ObservedEvidence(BaseModel):
     completed_steps: list[str]
     evidence_refs: list[str]
     caveats: list[str]
+    evidence_items: list[TrialEvidenceItem] = Field(default_factory=list, max_length=40)
+    selected_card_ids: list[str] = Field(default_factory=list, max_length=12)
     primary_ability: str | None = None
     observed_level: Literal["L1", "L2", "L3", "L4", "L5", "证据不足"] | None = None
     level_reason: str | None = None

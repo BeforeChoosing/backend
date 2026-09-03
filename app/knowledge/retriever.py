@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
 from typing import Iterable
@@ -41,6 +41,16 @@ class KnowledgeChunk:
     trust_level: str
     source_note: str
     score: float
+    # Provenance fields are optional at the object boundary so existing
+    # callers/tests that construct a chunk manually remain compatible.
+    source_url: str = ""
+    published_at: str = ""
+    retrieved_at: str = ""
+    version: str = ""
+    license: str = ""
+    source_type: str = ""
+    authority_score: float = 0.0
+    relevance_score: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -50,6 +60,14 @@ class _DocumentMeta:
     corpus: str
     trust_level: str
     source_note: str
+    source_url: str
+    published_at: str
+    retrieved_at: str
+    version: str
+    license: str
+    source_type: str
+    authority_score: float
+    relevance_score: float
 
 
 class KnowledgeRetriever:
@@ -64,6 +82,7 @@ class KnowledgeRetriever:
         self.source_dir = Path(source_dir).expanduser()
         self.db_path = Path(db_path).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.last_diagnostics: dict[str, object] = {}
         self._ensure_index()
 
     def rebuild(self) -> int:
@@ -91,6 +110,14 @@ class KnowledgeRetriever:
                     corpus TEXT NOT NULL,
                     trust_level TEXT NOT NULL,
                     source_note TEXT NOT NULL,
+                    source_url TEXT NOT NULL DEFAULT '',
+                    published_at TEXT NOT NULL DEFAULT '',
+                    retrieved_at TEXT NOT NULL DEFAULT '',
+                    version TEXT NOT NULL DEFAULT '',
+                    license TEXT NOT NULL DEFAULT '',
+                    source_type TEXT NOT NULL DEFAULT '',
+                    authority_score REAL NOT NULL DEFAULT 0,
+                    relevance_score REAL NOT NULL DEFAULT 0,
                     content_hash TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'active'
                 );
@@ -125,8 +152,10 @@ class KnowledgeRetriever:
                 connection.execute(
                     """
                     INSERT INTO knowledge_documents
-                    (document_id, path, title, corpus, trust_level, source_note, content_hash)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (document_id, path, title, corpus, trust_level, source_note,
+                     source_url, published_at, retrieved_at, version, license,
+                     source_type, authority_score, relevance_score, content_hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         meta.document_id,
@@ -135,6 +164,14 @@ class KnowledgeRetriever:
                         meta.corpus,
                         meta.trust_level,
                         meta.source_note,
+                        meta.source_url,
+                        meta.published_at,
+                        meta.retrieved_at,
+                        meta.version,
+                        meta.license,
+                        meta.source_type,
+                        meta.authority_score,
+                        meta.relevance_score,
                         content_hash,
                     ),
                 )
@@ -187,6 +224,68 @@ class KnowledgeRetriever:
             ).fetchone()
         return int(row["value"]) if row else 0
 
+    @property
+    def source_fingerprint(self) -> str:
+        """Return the fingerprint of the Markdown source used to build the index."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT value FROM knowledge_meta WHERE key = 'source_fingerprint'"
+            ).fetchone()
+        return str(row["value"]) if row else ""
+
+    def list_chunks(
+        self,
+        *,
+        corpus: str | None = None,
+        document_id: str | None = None,
+    ) -> list[KnowledgeChunk]:
+        """Materialize active chunks for local vector indexing or evaluation."""
+        filters = ["c.status = 'active'"]
+        params: list[str] = []
+        if corpus:
+            filters.append("c.corpus = ?")
+            params.append(corpus)
+        if document_id:
+            filters.append("c.document_id = ?")
+            params.append(document_id)
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT c.*, d.title AS document_title, d.source_note,
+                       d.source_url, d.published_at, d.retrieved_at, d.version,
+                       d.license, d.source_type, d.authority_score,
+                       d.relevance_score
+                FROM knowledge_chunks c
+                JOIN knowledge_documents d ON d.document_id = c.document_id
+                WHERE {' AND '.join(filters)}
+                ORDER BY c.document_id, c.chunk_index, c.id
+                """,
+                params,
+            ).fetchall()
+        return [self._row_to_chunk(row) for row in rows]
+
+    def get_chunks_by_ids(self, chunk_ids: list[str]) -> list[KnowledgeChunk]:
+        """Return active chunks in the same order as the supplied IDs."""
+        if not chunk_ids:
+            return []
+        unique_ids = list(dict.fromkeys(chunk_ids))
+        placeholders = ",".join("?" for _ in unique_ids)
+        with self._connection() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT c.*, d.title AS document_title, d.source_note,
+                       d.source_url, d.published_at, d.retrieved_at, d.version,
+                       d.license, d.source_type, d.authority_score,
+                       d.relevance_score
+                FROM knowledge_chunks c
+                JOIN knowledge_documents d ON d.document_id = c.document_id
+                WHERE c.status = 'active' AND c.id IN ({placeholders})
+                """,
+                unique_ids,
+            ).fetchall()
+        by_id = {row["id"]: self._row_to_chunk(row) for row in rows}
+        return [by_id[chunk_id] for chunk_id in unique_ids if chunk_id in by_id]
+
     def search(
         self,
         query: str,
@@ -211,7 +310,10 @@ class KnowledgeRetriever:
                 params.extend(candidates)
             rows = connection.execute(
                 f"""
-                SELECT c.*, d.title AS document_title, d.source_note
+                SELECT c.*, d.title AS document_title, d.source_note,
+                       d.source_url, d.published_at, d.retrieved_at, d.version,
+                       d.license, d.source_type, d.authority_score,
+                       d.relevance_score
                 FROM knowledge_chunks c
                 JOIN knowledge_documents d ON d.document_id = c.document_id
                 WHERE {' AND '.join(filters)}
@@ -229,21 +331,101 @@ class KnowledgeRetriever:
                 continue
             score = _score_terms(query, terms, matched, haystack)
             scored.append(
-                KnowledgeChunk(
-                    id=row["id"],
-                    document_id=row["document_id"],
-                    document_title=row["document_title"],
-                    corpus=row["corpus"],
-                    content=row["content"],
-                    heading_path=tuple(json.loads(row["heading_path"])),
-                    source_locator=row["source_locator"],
-                    trust_level=row["trust_level"],
-                    source_note=row["source_note"],
-                    score=score,
-                )
+                self._row_to_chunk(row, score=score)
             )
         scored.sort(key=lambda chunk: (-chunk.score, chunk.id))
-        return scored[: max(1, min(limit, 10))]
+        return scored[: max(1, min(limit, 100))]
+
+    def search_many(
+        self,
+        queries: Iterable[str],
+        *,
+        corpus: str,
+        limit: int = 5,
+        document_id: str | None = None,
+    ) -> list[KnowledgeChunk]:
+        """Fuse several lexical intents without concatenating their text."""
+
+        normalized_queries: list[str] = []
+        seen: set[str] = set()
+        for value in queries:
+            normalized = " ".join(str(value).split()).strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            normalized_queries.append(normalized)
+        bounded_limit = max(1, min(int(limit), 100))
+        if not normalized_queries:
+            self.last_diagnostics = {
+                "mode": "multi-query-empty",
+                "query_count": 0,
+                "vector_used": False,
+                "rerank_used": False,
+            }
+            return []
+
+        per_query: list[list[KnowledgeChunk]] = [
+            self.search(
+                query,
+                corpus=corpus,
+                document_id=document_id,
+                limit=max(20, bounded_limit),
+            )
+            for query in normalized_queries
+        ]
+        by_id = {
+            chunk.id: chunk
+            for chunks in per_query
+            for chunk in chunks
+        }
+        scores = {chunk_id: 0.0 for chunk_id in by_id}
+        per_query_ids: list[list[str]] = []
+        for query, chunks in zip(normalized_queries, per_query):
+            per_query_ids.append([chunk.id for chunk in chunks])
+            query_terms = set(_query_terms(query))
+            for rank, chunk in enumerate(chunks, start=1):
+                scores[chunk.id] += 1.0 / (60.0 + rank)
+                if query_terms.intersection(_query_terms(" ".join(chunk.heading_path))):
+                    scores[chunk.id] += 0.008
+
+        ordered = sorted(scores, key=lambda chunk_id: (-scores[chunk_id], chunk_id))
+        result = [replace(by_id[chunk_id], score=scores[chunk_id]) for chunk_id in ordered]
+        self.last_diagnostics = {
+            "mode": "multi-query-fts",
+            "query_count": len(normalized_queries),
+            "vector_used": False,
+            "rerank_used": False,
+            "embedding_batch_calls": 0,
+            "per_query_result_ids": per_query_ids,
+            "query_coverage": round(
+                sum(bool(ids) for ids in per_query_ids) / len(per_query_ids),
+                4,
+            ),
+        }
+        return result[:bounded_limit]
+
+    @staticmethod
+    def _row_to_chunk(row: sqlite3.Row, *, score: float = 0.0) -> KnowledgeChunk:
+        return KnowledgeChunk(
+            id=row["id"],
+            document_id=row["document_id"],
+            document_title=row["document_title"],
+            corpus=row["corpus"],
+            content=row["content"],
+            heading_path=tuple(json.loads(row["heading_path"])),
+            source_locator=row["source_locator"],
+            trust_level=row["trust_level"],
+            source_note=row["source_note"],
+            score=score,
+            source_url=_row_value(row, "source_url"),
+            published_at=_row_value(row, "published_at"),
+            retrieved_at=_row_value(row, "retrieved_at"),
+            version=_row_value(row, "version"),
+            license=_row_value(row, "license"),
+            source_type=_row_value(row, "source_type"),
+            authority_score=float(_row_value(row, "authority_score", 0) or 0),
+            relevance_score=float(_row_value(row, "relevance_score", 0) or 0),
+        )
 
     def _ensure_index(self) -> None:
         documents = sorted(self.source_dir.rglob("*.md"))
@@ -252,6 +434,7 @@ class KnowledgeRetriever:
         fingerprint = self._fingerprint(documents)
         try:
             with self._connection() as connection:
+                self._ensure_metadata_columns(connection)
                 value = connection.execute(
                     "SELECT value FROM knowledge_meta WHERE key = 'source_fingerprint'"
                 ).fetchone()
@@ -260,6 +443,35 @@ class KnowledgeRetriever:
         except sqlite3.OperationalError:
             pass
         self.rebuild()
+
+    @staticmethod
+    def _ensure_metadata_columns(connection: sqlite3.Connection) -> None:
+        """Migrate databases created before provenance fields were added."""
+
+        try:
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(knowledge_documents)"
+                ).fetchall()
+            }
+        except sqlite3.OperationalError:
+            return
+        additions = {
+            "source_url": "TEXT NOT NULL DEFAULT ''",
+            "published_at": "TEXT NOT NULL DEFAULT ''",
+            "retrieved_at": "TEXT NOT NULL DEFAULT ''",
+            "version": "TEXT NOT NULL DEFAULT ''",
+            "license": "TEXT NOT NULL DEFAULT ''",
+            "source_type": "TEXT NOT NULL DEFAULT ''",
+            "authority_score": "REAL NOT NULL DEFAULT 0",
+            "relevance_score": "REAL NOT NULL DEFAULT 0",
+        }
+        for name, declaration in additions.items():
+            if name not in columns:
+                connection.execute(
+                    f"ALTER TABLE knowledge_documents ADD COLUMN {name} {declaration}"
+                )
 
     def _candidate_ids(
         self,
@@ -301,6 +513,14 @@ class KnowledgeRetriever:
                 corpus=str(item.get("corpus") or "career"),
                 trust_level=str(item.get("trust_level") or "secondary_summary"),
                 source_note=str(item.get("source_note") or ""),
+                source_url=str(item.get("source_url") or ""),
+                published_at=str(item.get("published_at") or ""),
+                retrieved_at=str(item.get("retrieved_at") or ""),
+                version=str(item.get("version") or ""),
+                license=str(item.get("license") or ""),
+                source_type=str(item.get("source_type") or ""),
+                authority_score=float(item.get("authority_score") or 0),
+                relevance_score=float(item.get("relevance_score") or 0),
             )
         return result
 
@@ -314,6 +534,14 @@ class KnowledgeRetriever:
             corpus=corpus,
             trust_level="unreviewed",
             source_note="未提供 manifest 的本地资料。",
+            source_url="",
+            published_at="",
+            retrieved_at="",
+            version="",
+            license="",
+            source_type="local_markdown",
+            authority_score=0,
+            relevance_score=0,
         )
 
     @staticmethod
@@ -350,6 +578,12 @@ class _ManagedConnection:
 def _chunk_id(document_id: str, index: int, content: str) -> str:
     value = sha256(f"{document_id}:{index}:{content}".encode("utf-8")).hexdigest()[:16]
     return f"chk-{value}"
+
+
+def _row_value(row: sqlite3.Row, key: str, default: object = "") -> object:
+    """Read an optional column from old SQLite rows during schema migration."""
+
+    return row[key] if key in row.keys() else default
 
 
 def _parse_markdown(text: str) -> tuple[str, list[tuple[tuple[str, ...], str]]]:
