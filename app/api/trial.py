@@ -466,8 +466,6 @@ def _validate_dynamic_answer(task_id: str, answer: DynamicTrialAnswer, *, event_
         raise HTTPException(status_code=422, detail=f"请先完成：{'、'.join(missing)}。")
     if not event_revealed:
         raise HTTPException(status_code=422, detail="请先接收中途事件并完成重新决策。")
-    if answer.event_decision is None or not answer.event_response.strip():
-        raise HTTPException(status_code=422, detail="请填写中途事件后的维持或调整决定及依据。")
 
 
 def _normalize_card_play(

@@ -136,8 +136,6 @@ def _complete_dynamic_answer() -> dict:
         },
         "viewed_material_ids": ["background", "constraints"],
         "evidence_refs": ["background", "constraints"],
-        "event_decision": "调整",
-        "event_response": "只保留一个模型调用节点。",
     }
 
 
@@ -231,8 +229,6 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
                 },
                 "viewed_material_ids": ["background", "constraints"],
                 "evidence_refs": ["background", "constraints"],
-                "event_decision": "调整",
-                "event_response": "只保留一个模型调用节点。",
             }
         },
     )
@@ -252,7 +248,7 @@ def test_dynamic_workbench_records_coach_and_qwen_evidence(tmp_path, monkeypatch
     assert {item["id"] for item in evidence["evidence_items"]} >= {
         "card:trial-card-1",
         "answer:problem",
-        "event:decision",
+        "event:response",
     }
     evaluation = submitted.json()["evaluation"]
     assert evaluation["evaluation_protocol"] == "trial-evidence-v1"
